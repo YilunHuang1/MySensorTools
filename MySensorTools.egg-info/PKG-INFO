@@ -1,7 +1,0 @@
-Metadata-Version: 2.1
-Name: MySensorTools
-Version: 0.1.0
-Summary: Tools for robot sensor fault diagnosis, data analysis, log parsing, and visualization
-Author: YilunHuang1
-Requires-Python: >=3.7
-Provides-Extra: dev
