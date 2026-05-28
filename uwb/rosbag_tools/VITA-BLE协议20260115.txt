@@ -1,0 +1,367 @@
+UBITRAQ Nearby蓝牙数据传输协议
+
+
+数据约定
+所有的数字，前面带0x的和样例数据中表示十六进制数据，其他表示十进制数据
+除了CRC之外，所有数据采用小端格式，低位在前，高位在后，例如0x1234AB78，发送数据的顺序是78 AB 34 12
+BLE数据格式
+注意下面是蓝牙发送的所有数据，通过第一个字节message_id区分消息类型
+
+typedef struct __attribute__((__packed__)) {
+
+	uint8_t message_id;
+	uint8_t payload[64];
+
+} ni_packet_t;
+
+
+
+enum SampleAppMessageId {
+	// From accessory, 设备发送给手机
+	MessageId_accessoryConfigurationData = 0x1,
+	MessageId_accessoryUwbDidStart = 0x2,
+	MessageId_accessoryUwbDidStop = 0x3,
+	
+	// To accessory, 手机发送给设备
+	MessageId_init = 0xA,
+	MessageId_configure_and_start = 0xB,
+	MessageId_stop = 0xC,
+
+	MessageId_Vbot_ctr = 0x11,
+	// Developer can extend SampleAppMessageId with other MessageId
+	//UserId_getDeviceStruct = 0x20,
+	//UserId_setDeviceStruct = 0x21,
+
+	// 设备发送给手机
+	//UserId_iOSNotify = 0x2F,
+
+	// 设备发送给手机
+	//UserId_iOSNotify_Position = 0x30,	//测距和角度信息
+	//UserId_iOSNotify_Life = 0x31,		//活体信息
+};
+
+
+
+
+0x01: MessageId_accessoryConfigurationData，设备->手机
+Message	Message ID
+MessageId_accessoryConfigurationData	0x01
+Payload =  	{
+				uint16_t            majorVersion; // NI Accessory Protocol major version
+				uint16_t            minorVersion; // NI Accessory Protocol minor version
+				uint8_t             preferredUpdateRate;
+				uint8_t             rfu[10];
+
+				uint8_t             uwbConfigDataLength;
+				uint8_t             uwbConfigData[MAX_UWB_CONFIG_SIZE];	//具体内容定义如下
+			}
+
+			majorVersion => 固定值: 0x01	
+			minorVersion => 固定值: 0x00	
+			preferredUpdateRate => 	测距频率协商
+									PreferredUpdateRate_Automatic = 0, // iOS will choose a value
+									PreferredUpdateRate_Infrequent = 10, // ~1.3Hz
+									PreferredUpdateRate_UserInteractive = 20, // ~5.5Hz
+			rfu[10] => 	保留10个字节
+
+			uwbConfigDataLength => ConfigData数据的长度
+
+			uwbConfigData => 定义如下,需要区分苹果的版本: 
+							//苹果R1版本定义
+				typedef struct
+				{
+					//uint8_t Length;
+					uint8_t majorVersion[2];	//majorVersion[0] = 0x01; majorVersion[1] = 0x00;
+					uint8_t minorVersion[2];	//minorVersion[0] = 0x01; minorVersion[1] = 0x00;
+					uint8_t manufacturer_id[4];
+					uint8_t model_id[4];
+					uint8_t mw_version[4];
+					uint8_t ranging_role;
+					uint8_t device_mac_addr[MAC_SHORT_ADD_LEN];
+				} __attribute__((packed))AccessoryConfigDataContent_t;
+
+				//苹果R2版本定义
+				typedef struct
+				{
+					//uint8_t Length;
+					uint8_t majorVersion[2];
+					uint8_t minorVersion[2];
+					uint8_t manufacturer_id[4];
+					uint8_t model_id[4];
+					uint8_t mw_version[4];
+					uint8_t ranging_role;
+					uint8_t device_mac_addr[MAC_SHORT_ADD_LEN];
+					uint8_t rfu_1;
+					uint8_t rfu_2;
+				} __attribute__((packed))AccessoryConfigDataContentR2_t;
+
+			默认值如下
+				src_addr = (uint16_t)xTaskGetTickCount();	//地址可以随机值
+					
+				config_data2->majorVersion[0] = 0x01;
+				config_data2->majorVersion[1] = 0x00;
+				
+				config_data2->minorVersion[0] = 0x01;
+				config_data2->minorVersion[1] = 0x00;
+				
+				config_data2->manufacturer_id[0] = 0x3F;
+				config_data2->manufacturer_id[1] = 0xF5;
+				config_data2->manufacturer_id[2] = 0x03;
+				config_data2->manufacturer_id[3] = 0x00;
+				
+				config_data2->model_id[0] = 0xB8;
+				config_data2->model_id[1] = 0x0B;
+				config_data2->model_id[2] = 0x00;
+				config_data2->model_id[3] = 0x00;
+
+				config_data2->mw_version[0] = 0x00;
+				config_data2->mw_version[1] = 0x00;
+				config_data2->mw_version[2] = 0x01;
+				config_data2->mw_version[3] = 0x01;
+				
+				config_data2->ranging_role = 0x01;
+				
+				config_data2->device_mac_addr[0] = src_addr&0xff;
+				config_data2->device_mac_addr[1] = (src_addr>>8)&0xff;
+				
+				config_data2->rfu_1 = 0x19;
+				config_data2->rfu_2 = 0x00;
+				
+				
+0x02: MessageId_accessoryUwbDidStart，设备->手机
+Message	Message ID
+MessageId_accessoryUwbDidStart	0x02
+Payload =  	{
+				//payload空，不需要任何数据
+			}
+			
+			
+0x03: MessageId_accessoryUwbDidStop，设备->手机
+Message	Message ID
+MessageId_accessoryUwbDidStop	0x03
+Payload =  	{
+				//payload空，不需要任何数据
+			}
+			
+			
+0x0A: MessageId_init，手机->设备
+Message	Message ID
+MessageId_init	0x0A
+Payload =  	{
+				//payload空，不需要任何数据
+			}
+			
+			
+0x0B: MessageId_configure_and_start，手机->设备
+Message	Message ID
+MessageId_configure_and_start	0x0B
+Payload =  	{
+				uint16_t major_ver;
+				uint16_t minor_ver;
+				uint8_t len;
+
+				uint8_t country_code[2];
+				uint8_t session_id[4];
+				uint8_t preamble_idx;
+				uint8_t chan_num;
+				uint8_t slot_ix;
+				uint8_t res0;
+				uint8_t slot_rstu[2];
+				uint8_t range_period[2];
+				uint8_t ranging_round_control;
+				uint8_t Vupper48[6];
+				uint8_t short_addr[2];	//iPhone address
+			}
+			
+			
+0x0C: MessageId_stop，手机->设备
+Message	Message ID
+MessageId_stop	0x0C
+Payload =  	{
+				//payload空，不需要任何数据
+			}
+			
+
+0x11: 机器狗场景蓝牙交互
+Message	Message ID
+Message_Header	0x11
+Payload =  	{
+				uint8_t Payload_Header;	//有效数据头
+				uint16_t Length;		//Length是大端格式
+
+				uint8_t Data[N];		//数据，可选
+			}
+
+		Payload_Header
+		{
+			0x01: 模式，信令->机器狗
+			{
+				Data: 	0x01: 跟随
+						0x02: 停止跟随
+						0x03: 机器人返回信令处
+						... ...
+			}
+
+			0x02: 语音控制（语音数据传输会有专门的BLE Service），机器狗->信令
+			{
+				Data: 	0x01: 语音指令执行成功
+						0x02: 语音指令执行失败
+						... ...
+			}
+
+			0x03: 机器狗响应
+			{
+				Data: 	0x01: 0x01, 跟随 响应
+						0x01: 0x02, 停止跟随 响应
+						0x01: 0x03, 机器人返回信令处 响应
+						... ...
+			}
+
+			0x04: 信令响应
+			{
+				Data: 	0x05: 0x01, 信令查找位置 响应
+						0x05: 0x02, 跟随 响应
+						0x05: 0x03, 停止跟随 响应
+						... ...
+			}
+
+			0x05: 查找，机器狗->信令
+			{
+				Data: 	0x01: 查找信令位置
+						0x02: 跟随
+						0x03: 停止跟随
+						0x04: 待定
+						... ...
+			}
+			
+			0x06: 版本号，CMD，机器狗->信令(对应0x07需要响应)
+			{
+				Data[0]: 	0x01: 查看版本号
+			}
+			
+			0x07: 版本号，RSP，信令->机器狗
+			{
+				Data[0]: 	0x01: 
+							{
+								Data[1-6]: 
+									uint8_t Software_MAJOR,
+									uint8_t Software_MINOR,
+									uint8_t Software_PATCH,
+
+									uint8_t Hardware_MAJOR,
+									uint8_t Hardware_MINOR,
+									uint8_t Hardware_PATCH,
+							}
+			}
+
+			0x08: 信令状态，NTF，信令->机器狗
+			{
+				Data[0]: 	0x01: 错误状态, uint32_t
+							{
+								Data[1-4]: 
+									0x00000001: D5初始化失败
+									0x00000002: D5会话创建失败
+									0x00000004: D5测距距离异常（暂定距离值不是0-100M之间视为异常）
+									0x00000008: D5测距断开
+									0x00000010: IMU初始化失败
+									0x00000020: 电压过低（电压小于3200mv）
+									注: 可指示多种错误，如0x00000021: D5初始化失败，电压过低
+									
+								Data[5]: 
+									Data[5]: 	电池电量百分比，取值范围[0~100%]
+							}
+
+							0x02: IMU数据//数据解析参考《姿态传感器-陀螺仪_LSM6DS3TR-C_规格书》中page21-'Table 3. Mechanical characteristics'.
+							{
+								Data[1-4], uint32_t timestamp_ms;
+
+								Data[5], 量程: 
+								bit[1:0]: 加速度计量程
+									0x00: 正负2g
+									0x01: 正负16g
+									0x02: 正负4g
+									0x03: 正负8g
+
+								bit[3:2]: 保留
+
+								bit[6:4]: 陀螺仪量程
+									0x00: 正负125度/秒
+									0x01: 正负250度/秒
+									0x02: 正负500度/秒
+									0x03: 正负1000度/秒
+									0x04: 正负2000度/秒
+
+								bit[7]: 保留
+
+								Data[6-7], int16_t acc_x;
+								Data[8-9], int16_t acc_y;
+								Data[10-11], int16_t acc_z;
+								Data[12-13], int16_t gyro_x;
+								Data[14-15], int16_t gyro_y;
+								Data[16-17], int16_t gyro_z;
+								/*
+								LA_So Linear acceleration sensitivity
+								LA_So = ±2 0.061  mg/LSB
+								LA_So = ±4 0.122  mg/LSB
+								LA_So = ±8 0.244  mg/LSB
+								LA_So = ±16 0.488 mg/LSB
+								G_So Angular rate sensitivity
+								G_So = ±125 4.375 mdps/LSB
+								G_So = ±250 8.75  mdps/LSB
+								G_So = ±500 17.50 mdps/LSB
+								G_So = ±1000 35   mdps/LSB
+								G_So = ±2000 70		mdps/LSB
+								*/ 
+							}
+							0x03: 语音数据传输完成
+							{
+								空
+							}
+								
+			}
+			0x09: 量产测试
+			{
+				Data[0]：	0x01：ble建立连接之后 rssi信号强度; 手机 -> UT200-TD
+							{
+								Data[1]：int8_t ble_rssi, 取值范围[-128~0]
+							} 
+
+							0x02：麦克风增益，手机/机器狗 -> UT200-TD
+							{
+								Data[1]：int8_t microphone_gain, 取值范围[-128~127]
+							}//:11,09,00,02,02,23  ->设置为35
+
+							0x03: 语音识别；手机 -> UT200-TD; 
+							{
+								//
+								Data[1]: uint8_t status, 
+									0x01：失败
+									0x02：成功
+							}
+			}
+
+
+		} 
+
+
+举例，蓝牙发送跟随指令: 
+
+0x11 0x01 0x00 0x01 0x01
+
+	0x11: Message_Header
+	0x01: Payload_Header
+	0x0001: Length
+	0x01: Data，跟随
+	
+	
+
+
+
+
+
+
+
+
+
+	
+	

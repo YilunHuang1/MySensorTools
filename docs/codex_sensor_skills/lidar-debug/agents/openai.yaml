@@ -1,0 +1,4 @@
+interface:
+  display_name: "LiDAR Debug"
+  short_description: "Debug Vita LiDAR data faults."
+  default_prompt: "Analyze this Vita robot LiDAR issue using code-grounded checks and logs."

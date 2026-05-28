@@ -1,0 +1,4 @@
+interface:
+  display_name: "IMU MCAP Analysis"
+  short_description: "Analyze Vita IMU MCAP faults."
+  default_prompt: "Analyze this Vita robot IMU fault from MCAP/log evidence and code paths."

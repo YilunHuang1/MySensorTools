@@ -1,0 +1,4 @@
+interface:
+  display_name: "Vita Sensor Debug"
+  short_description: "Triage Vita robot sensor issues."
+  default_prompt: "Triage this Vita robot sensor issue and route it to the right sensor-specific debug workflow."

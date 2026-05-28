@@ -1,0 +1,4 @@
+interface:
+  display_name: "Stereo Debug"
+  short_description: "Debug Vita stereo camera data."
+  default_prompt: "Analyze this Vita robot stereo issue using code-grounded checks and logs."

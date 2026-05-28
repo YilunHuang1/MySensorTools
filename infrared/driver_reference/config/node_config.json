@@ -1,0 +1,48 @@
+{
+  "logger": {
+    "app_name": "infrared",
+    "log_level": "INFO",
+    "log_dir": "/tmp/logs/",
+    "to_console": false
+  },
+  "node_list": [
+    {
+      "class_name": "InfraredNode",
+      "node_name": "infrared_camera",
+      "node_config_path": "config/nodes/infrared_camera.json",
+      "use_intra_process_comms": false,
+      "tasks": [
+        {
+          "task_name": "infrared_camera_task",
+          "task_class": "InfraredCameraTask",
+          "task_type": "TimedTask",
+          "subscribers": [],
+          "publishers": [
+            {
+              "name": "/infrared_camera/image_raw",
+              "type": "sensor_msgs/Image",
+              "qos": {
+                "history": "keep_last",
+                "depth": 5,
+                "reliability": "reliable",
+                "durability": "volatile"
+              }
+            },
+            {
+              "name": "/infrared_camera/video_h265",
+              "type": "foxglove_msgs/CompressedVideo",
+              "qos": {
+                "history": "keep_last",
+                "depth": 5,
+                "reliability": "reliable",
+                "durability": "volatile"
+              }
+            }
+          ],
+          "period_ms": 100,
+          "phase_ms": 0
+        }
+      ]
+    }
+  ]
+}

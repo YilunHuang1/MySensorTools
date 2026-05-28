@@ -1,0 +1,20 @@
+将sc230ai_vit放到以下目录
+app/samples/platform_samples/vp_sensors
+
+
+将vp_sensors.c文件替换以下文件夹下的将vp_sensors.c文件
+app/samples/platform_samples/vp_sensors
+
+
+将sample_isp_1.1.1放到以下目录，并修改目录名称将sample_isp(注意保存好原本的sample_isp文件)
+app/samples/platform_samples
+
+
+
+
+sc230ai_hdr_tuning.json    sc230ai_hdr_tuning_module_cfg.json放入开发板的目录：/usr/hobot/lib/sensor
+
+编译后：将sdk下生成的app/samples/platform_samples/tuning_tool/out/isp_tuning
+		传输到X5的/app/platform_samples/tuning_tool下
+		
+		

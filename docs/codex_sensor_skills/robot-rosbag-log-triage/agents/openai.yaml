@@ -1,0 +1,4 @@
+interface:
+  display_name: "Robot Bag Log Triage"
+  short_description: "Triage Vita bags, MCAP, and logs."
+  default_prompt: "Correlate this Vita robot problem time with bag topics, MCAP messages, and logs."

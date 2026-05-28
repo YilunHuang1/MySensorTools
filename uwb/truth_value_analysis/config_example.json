@@ -1,0 +1,55 @@
+{
+  "raw_source_locator": {
+    "patterns": ["UWB原始数据-216个数据*", "UWB原始数据*"],
+    "recursive": true,
+    "extra_paths": []
+  },
+  "topic_name": "/uwb/data",
+  "prefer_filtered": true,
+  "distance_unit": "m",
+  "uwb_version": "007",
+  "enable_quality_check": true,
+  "use_filtered": true,
+  "processing": {
+    "batch_size": 1000,
+    "parallel_workers": 4,
+    "memory_limit_mb": 1024
+  },
+  "output": {
+    "default_format": "csv",
+    "include_metadata": true,
+    "precision": {
+      "distance": 6,
+      "angle": 3
+    }
+  },
+  "thresholds": {
+    "eps_distance": 1e-9,
+    "eps_angle": 1e-6,
+    "dist_abs_diff_thresh_m": 0.05,
+    "dist_rel_err_thresh": 0.1,
+    "angle_abs_diff_thresh_deg": 5.0,
+    "angle_rel_err_thresh": 0.2
+  },
+  "error_handling": {
+    "on_missing_mcap": "warn",
+    "on_parse_error": "log"
+  },
+  "log_level": "INFO",
+  "log_file": null,
+  "combine_results": false,
+  "field_mappings": {
+    "timestamp_sec": "timestamp_sec",
+    "timestamp_nanosec": "timestamp_nanosec",
+    "anchor_id": "anchor_id",
+    "tag_id": "tag_id",
+    "distance": "distance",
+    "angle_azimuth": "angle_azimuth",
+    "angle_elevation": "angle_elevation",
+    "distance_filtered": "distance_filtered",
+    "angle_azimuth_filtered": "angle_azimuth_filtered",
+    "angle_elevation_filtered": "angle_elevation_filtered",
+    "quality": "quality",
+    "status": "status"
+  }
+}

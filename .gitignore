@@ -1,0 +1,49 @@
+# Python/cache
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# macOS/editor
+.DS_Store
+.idea/
+.vscode/
+
+# Sensor raw data and generated artifacts
+*.mcap
+*.db3
+*.bag
+*.pcd
+*.raw
+*.csv
+*.xlsx
+*.pdf
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.mp4
+*.mp3
+*.zip
+*.tar
+*.tar.gz
+*.tar.xz
+*.so
+*.hbm
+*.safetensors
+
+# Common output directories
+raw_data/
+processed_results/
+analysis_results/
+pcd_output*/
+mcap_data/
+logs/
+reports/
+output/
+
+# Keep checked-in calibration CSV files.
+!lidar/packets_parse/config/calibration/*.csv

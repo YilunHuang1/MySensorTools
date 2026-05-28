@@ -1,0 +1,15 @@
+# UWB数据分析系统依赖包
+# 数据处理
+pandas>=1.5.0
+numpy>=1.21.0
+
+# 可视化
+matplotlib>=3.5.0
+seaborn>=0.11.0
+
+# 科学计算
+scipy>=1.9.0
+
+# 其他工具
+pathlib2>=2.3.0  # Python < 3.4 兼容性
+argparse>=1.4.0  # 命令行参数解析

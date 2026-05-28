@@ -1,0 +1,4 @@
+interface:
+  display_name: "Infrared Debug"
+  short_description: "Debug Vita infrared camera data."
+  default_prompt: "Analyze this Vita robot infrared issue using code-grounded checks and logs."

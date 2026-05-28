@@ -1,0 +1,25 @@
+{
+    "infrared_camera_config": {
+        "sensor_name": "sc202cs",
+        "width": 1536,
+        "height": 1160,
+        "fps": 15,
+        "vse_channel": 0,
+        "enable_gdc": false
+    },
+    "image_save_config": {
+        "enable_save": false,
+        "save_dir": "/tmp/infrared_camera",
+        "save_frame_interval": 30
+    },
+    "performance_config": {
+        "enable_monitoring": true,
+        "execution_frequency_hz": 15.0
+    },
+    "codec_config": {
+        "enable_h265": false,
+        "h265_topic": "/infrared_camera/video_h265",
+        "bitrate_kbps": 2048,
+        "gop_size": 30
+    }
+}

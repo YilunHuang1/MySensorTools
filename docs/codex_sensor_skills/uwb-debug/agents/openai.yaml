@@ -1,0 +1,4 @@
+interface:
+  display_name: "UWB Debug"
+  short_description: "Debug Vita UWB anchor and tag data."
+  default_prompt: "Analyze this Vita robot UWB issue using code-grounded checks and logs."
