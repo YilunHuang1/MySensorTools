@@ -5,7 +5,8 @@ Baseline: vita-robot remote master 291b58055b54a924735604f26b840ab1f22b5427
 investigation. Read `git show origin/master:path`; a local ROS worktree is not the
 latest source. Historical driver snippets in MySensorTools are not current code.
 
-Install MySensorTools from its repository root with `pip install -e '.[analysis]'`.
+Copy the relevant tool folder and install its local `requirements.txt`.
+The packaged IMU skill also includes a self-contained scripts directory.
 Its MCAP reader uses embedded ROS CDR / FlatBuffers BFBS / JSON schemas without a
 ROS installation. Logical sensor names normally become
 `aorta/<group>/pub/<name>`. Inspect the actual channel list; use exact names for

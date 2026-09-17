@@ -57,10 +57,22 @@ def collect_ranging(duration):
         return list(iter_uwb_rows(path, 'uwb/ranging'))
 
 
-def check_ranging_online(duration=10, *, rows=None, min_frame_rate=None):
+def check_ranging_online(duration=10, *, rows=None, min_frame_rate=None, state_before=None, state_after=None):
     try:
         rows = collect_ranging(duration) if rows is None else rows
         stamps = [r['publish_time_ns'] for r in rows]
+        if not stamps:
+            data = {'frame_count': 0, 'state_before': state_before, 'state_after': state_after}
+            # Two snapshots distinguish an unmet test precondition from a broken data path.
+            known_states = not isinstance(state_before, bool) and not isinstance(state_after, bool)
+            if known_states and state_before in ('CONNECTED', 1) and state_after in ('CONNECTED', 1):
+                return CheckResult('测距功能', CheckStatus.SKIP,
+                                   '采集前后均为 CONNECTED：已连接但未开启测距；online 不发送开启命令', data), None
+            if known_states and state_before in ('RANGING', 2) and state_after in ('RANGING', 2):
+                return CheckResult('测距功能', CheckStatus.FAIL,
+                                   '采集前后均为 RANGING，但 uwb/ranging 收到 0 帧；需检查数据发布/订阅链路', data), None
+            return CheckResult('测距功能', CheckStatus.WARN,
+                               f'收到 0 帧；测距状态未确认或发生变化 ({state_before} → {state_after})', data), None
         if len(stamps) < 2:
             return CheckResult('测距功能', CheckStatus.WARN, f'仅 {len(stamps)} 帧，未完成测距验收'), None
         if any(b <= a for a, b in zip(stamps, stamps[1:])):

@@ -1,0 +1,245 @@
+[
+  {
+    "folder": "common",
+    "modules": [
+      "flatbuffer",
+      "mcap"
+    ],
+    "entries": [
+      "parse_mcap_log.py",
+      "create_debug_case.py"
+    ]
+  },
+  {
+    "folder": "camera",
+    "modules": [
+      "aorta",
+      "flatbuffer",
+      "mcap"
+    ],
+    "entries": [
+      "capture_stereo_isp.py"
+    ]
+  },
+  {
+    "folder": "camera/distortion",
+    "modules": [
+      "calibration",
+      "images"
+    ],
+    "entries": [
+      "stereo_intrinsic.py",
+      "visualize_distortion_ring.py",
+      "visualize_distortion_ring_fisheye.py"
+    ]
+  },
+  {
+    "folder": "camera/eeprom",
+    "modules": [],
+    "entries": [
+      "parse_eeprom.py"
+    ]
+  },
+  {
+    "folder": "camera/isp_json",
+    "modules": [],
+    "entries": []
+  },
+  {
+    "folder": "imu/mcap_analysis",
+    "modules": [
+      "flatbuffer",
+      "mcap"
+    ],
+    "entries": [
+      "analyze_imu_mcap.py"
+    ]
+  },
+  {
+    "folder": "imu/vibration",
+    "modules": [
+      "flatbuffer",
+      "imu",
+      "mcap"
+    ],
+    "entries": [
+      "analyze_vibration.py"
+    ]
+  },
+  {
+    "folder": "infrared/raw_tools",
+    "modules": [
+      "flatbuffer",
+      "images",
+      "mcap"
+    ],
+    "entries": [
+      "IrConverter.py",
+      "read_local_raw.py"
+    ]
+  },
+  {
+    "folder": "infrared/ir_qr_bench",
+    "modules": [
+      "aorta",
+      "calibration",
+      "flatbuffer",
+      "images",
+      "mcap"
+    ],
+    "entries": [
+      "ir_qr_bench.py"
+    ]
+  },
+  {
+    "folder": "lidar/realtime_check",
+    "modules": [
+      "aorta",
+      "flatbuffer",
+      "lidar",
+      "mcap",
+      "pointcloud"
+    ],
+    "entries": [
+      "lidar_realtime_check.py"
+    ]
+  },
+  {
+    "folder": "lidar/packets_parse",
+    "modules": [
+      "flatbuffer",
+      "lidar",
+      "mcap",
+      "pcd"
+    ],
+    "entries": [
+      "extract_lidar_pcd.py",
+      "extract_lidar_pcd_with_ts.py",
+      "compare_timestamp_modes.py",
+      "scripts/extract.py",
+      "scripts/check_sequence.py",
+      "point_cloud_tools.py",
+      "visualize_pcd.py",
+      "analyze_calibration.py",
+      "analyze_pcd_quality.py",
+      "extract_with_timestamp_range_example.py"
+    ]
+  },
+  {
+    "folder": "lidar/packets_parse/foxglove",
+    "modules": [
+      "flatbuffer",
+      "lidar",
+      "mcap"
+    ],
+    "entries": [
+      "mcap_add_lidar_points.py"
+    ]
+  },
+  {
+    "folder": "uwb/ble_tools",
+    "modules": [
+      "uwb_serial"
+    ],
+    "entries": [
+      "analyze_angle_all.py",
+      "analyze_angle_test6.py",
+      "analyze_uwb_logs.py",
+      "deploy.py"
+    ]
+  },
+  {
+    "folder": "uwb/desai_ble",
+    "modules": [
+      "uwb_serial"
+    ],
+    "entries": [
+      "run_uwb_ble.py"
+    ]
+  },
+  {
+    "folder": "uwb/smoke_test",
+    "modules": [
+      "aorta",
+      "flatbuffer",
+      "mcap",
+      "uwb",
+      "uwb_serial"
+    ],
+    "entries": [
+      "uwb_smoke_test.py"
+    ]
+  },
+  {
+    "folder": "uwb/truth_value_analysis",
+    "modules": [
+      "flatbuffer",
+      "mcap",
+      "uwb"
+    ],
+    "entries": [
+      "mcap_to_csv_cdr_correct.py",
+      "uwb_analysis_pipeline.py"
+    ]
+  },
+  {
+    "folder": "uwb/mcap_tools/vis_ansys",
+    "modules": [
+      "flatbuffer",
+      "mcap",
+      "uwb"
+    ],
+    "entries": [
+      "mcap_to_csv.py",
+      "visualization.py"
+    ]
+  },
+  {
+    "folder": "uwb/mcap_tools/uwb_data_b1_b2_compare",
+    "modules": [
+      "flatbuffer",
+      "mcap",
+      "uwb"
+    ],
+    "entries": [
+      "mcap_to_csv_cdr_correct.py",
+      "batch_mcap_analysis.py",
+      "uwb_analysis_visualization_latest.py"
+    ]
+  },
+  {
+    "folder": "uwb/rosbag_tools",
+    "modules": [
+      "flatbuffer",
+      "mcap"
+    ],
+    "entries": [
+      "uwb.py"
+    ]
+  },
+  {
+    "folder": "uwb/vendor_compare",
+    "modules": [],
+    "entries": [
+      "main_analysis.py",
+      "verify_quanji_1_2m_static.py"
+    ]
+  },
+  {
+    "folder": "uwb/visualization",
+    "modules": [],
+    "entries": [
+      "plot_uwb_csv.py"
+    ]
+  },
+  {
+    "folder": "docs/codex_sensor_skills/imu-mcap-analysis/scripts",
+    "modules": [
+      "flatbuffer",
+      "mcap"
+    ],
+    "entries": [
+      "analyze_imu_mcap.py"
+    ]
+  }
+]

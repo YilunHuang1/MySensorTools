@@ -1,8 +1,6 @@
-> Aorta migration (2026-09-17): install the repository root package first with
-> `pip install -e '.[analysis,device,infrared]'`. Offline MCAP readers accept embedded
-> CDR/BFBS/JSON schemas; live tools use Aorta. Historical ROS commands, fixed paths,
-> sample versions and results below are archival context. Use each updated entry's
-> `--help` and `docs/TOOLS_GUIDE.md` for current commands and verification limits.
+> 当前版本按工具文件夹独立使用：复制整个工具文件夹，在该目录执行
+> `python3 -m pip install -r requirements.txt`。无需安装仓库根项目。
+> 下方历史 ROS 示例仅作参考，当前命令以本目录 `STANDALONE.md` 和脚本 `--help` 为准。
 
 # UWB 真值准度分析（距离 & 角度）
 

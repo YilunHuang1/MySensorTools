@@ -1,0 +1,2 @@
+# Install from this tool folder: python3 -m pip install -r requirements.txt
+# Python standard library only; no pip dependencies.

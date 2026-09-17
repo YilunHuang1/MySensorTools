@@ -5,7 +5,6 @@
 从 MCAP 文件中提取 /lidar_packets 并转换为 PCD 点云文件
 """
 
-from sensor_tools.lidar import iter_packet_messages
 import argparse
 import sys
 import time
@@ -14,6 +13,7 @@ from pathlib import Path
 # 添加项目根目录到路径
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
+from sensor_tools.lidar import iter_packet_messages
 
 from src.core.calibration import CalibrationManager
 from src.core.decoder import VanjeeDecoder

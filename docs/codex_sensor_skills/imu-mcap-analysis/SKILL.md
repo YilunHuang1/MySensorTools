@@ -40,7 +40,7 @@ python3 <skill_dir>/scripts/analyze_imu_mcap.py logs <bag.mcap> \
   --log-keywords "IMU_DATA_ANOMALY,SPI,Accel Norm,GPS 0 buffer overflow"
 ```
 
-The repository wrapper uses `sensor_tools.mcap` and embedded CDR/BFBS schemas, including vlog batches. Install the root package first. Read [the Aorta contract](../AORTA.md); units are preserved, not inferred or silently converted.
+The scripts directory includes its own `sensor_tools.mcap` reader and handles embedded CDR/BFBS schemas and vlog batches. Copy the scripts directory and install its local `requirements.txt`. Read [the Aorta contract](../AORTA.md); units are preserved, not inferred or silently converted.
 
 ## Historical ROS facts to re-verify against Aorta adapters
 

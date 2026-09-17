@@ -81,8 +81,23 @@ pending. Private evidence is in ignored `.validation/` and is not a public fixtu
 - Serial/BLE radio operation, SPI writes/restoration, physical AprilTag pose accuracy
   and GUI integrations have the limitations identified in their rows. Protocol
   simulation, build or replay evidence is not relabeled as physical acceptance.
-- Clean-environment installation and 86 regression tests (84 core plus two BLE logging checks) passed. Final publication
+- Clean-environment installation and 123 regression tests (including independent-folder workflows and two BLE logging checks) passed. Final publication
   review and GitHub synchronization are recorded in AORTA_MIGRATION_STATUS.md.
 
 No private raw fixture, robot configuration or capture is committed. Existing local
 `lidar/realtime_check/Untitled` is intentionally left untouched and excluded.
+
+## Independent-folder regression coverage
+
+All 22 Python folders in [INDEPENDENT_TOOLS.md](INDEPENDENT_TOOLS.md) were copied
+outside the checkout and exercised without loading a root editable installation.
+Local runtime modules and requirements are supplied; embedded modules are checked
+against maintained source. Seven synthetic processing workflows and a simulated
+20 Hz online ranging PASS verify more than CLI startup. Real copied-folder replays
+cover UWB, logs, IMU, infrared export/detection and LiDAR preview/checking.
+The old anomalous LiDAR capture still reports its CRC/sequence errors correctly.
+
+The latest 199 smoke run is INCOMPLETE because uwb.service had stopped before the
+run. Earlier CONNECTED/no-ranging evidence and this later unavailable-service
+snapshot are separate; neither is physical ranging acceptance. See migration status
+for exact timing and coverage.

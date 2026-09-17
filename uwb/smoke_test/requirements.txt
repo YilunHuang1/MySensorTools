@@ -1,5 +1,4 @@
-# Runtime dependencies for online Aorta checks and standalone serial/BLE helpers.
-# The sensor_tools subdirectory ships with this folder; no root project install is needed.
+# Install from this tool folder: python3 -m pip install -r requirements.txt
 mcap>=1.2
 PyYAML>=6
 pyserial>=3.5

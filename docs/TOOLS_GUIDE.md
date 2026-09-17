@@ -1,22 +1,20 @@
 # Sensor tools: Aorta and historical ROS MCAP
 
-Use Python 3.10+ from the repository root:
+Use Python 3.10+. Copy the tool folder you need, including its runtime/config
+subdirectories, and install its local requirements:
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e '.[analysis,device,infrared,test]'
-python -m pytest -q
+cd <copied-tool-folder>
+python3 -m pip install -r requirements.txt
+python3 <entry-script>.py --help
 ```
 
-Normally the root installation is required even when running a script in a
-subdirectory. UWB smoke tests are self-contained: copy the whole
-[`uwb/smoke_test` folder](../uwb/smoke_test/README.md), including its `sensor_tools`
-subdirectory, and run `python3 -m pip install -r requirements.txt` there.
-No root project installation, archive builder or private installer is needed.
-Offline readers do not need ROS. Linux BLE advertising additionally needs system
-BlueZ, `dbus-python` and PyGObject; these are not portable pip-only dependencies.
-Open3D is optional for interactive point-cloud windows; PNG export does not need it.
+No root project install, archive build or private installer is required. See
+[INDEPENDENT_TOOLS.md](INDEPENDENT_TOOLS.md) for exact folder boundaries.
+Offline MCAP readers do not need ROS. BLE advertising still requires Linux BlueZ,
+`dbus-python` and PyGObject. Open3D is optional for interactive point-cloud windows.
+The repository-relative commands below locate each entry; inside a copied folder,
+use just that entry's local filename (or `scripts/...` for LiDAR's internal entries).
 
 ## Common data contract
 

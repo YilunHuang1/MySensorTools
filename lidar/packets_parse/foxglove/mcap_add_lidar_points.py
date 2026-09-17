@@ -44,7 +44,7 @@ TOPIC_OUT  = "/sensor_tools/lidar_points_preview"
 FRAME_ID   = "lidar"
 
 # 校准文件路径 (相对本脚本目录)
-CALIB_CSV  = Path(__file__).parent.parent / "config" / "calibration" / "Vanjee_722z_VA.csv"
+CALIB_CSV  = Path(__file__).parent / "Vanjee_722z_VA.csv"
 
 # 距离参数
 DISTANCE_RES = 0.002

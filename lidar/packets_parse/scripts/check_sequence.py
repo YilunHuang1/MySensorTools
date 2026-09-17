@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """从MCAP提取azimuth和sequence_num序列，检测异常"""
-from sensor_tools.lidar import iter_packet_messages
 import argparse
 import sys
 import struct
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from sensor_tools.lidar import iter_packet_messages
 from mcap.reader import make_reader
 from src.core.decoder import VanjeeDecoder, crc32_mpeg2_padded
 

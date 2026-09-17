@@ -1,6 +1,6 @@
 # Current Aorta / ROS MCAP benchmark
 
-Use the source entry point `ir_qr_bench.py`, installed with `pip install -e '.[analysis,infrared]'`.
+Use the source entry point `ir_qr_bench.py`, installed with `python3 -m pip install -r requirements.txt` from this copied folder.
 It passively captures Aorta frames or reads an existing MCAP; it does not change
 GPIO, lighting, services or robot motion.
 

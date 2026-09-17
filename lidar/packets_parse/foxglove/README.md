@@ -17,10 +17,11 @@ for display, not sensor timing analysis. Reload the script when switching bags.
 
 ## Offline MCAP
 
-Install the root package (`pip install -e '.[analysis]'`), then:
+Copy this entire `foxglove` folder (including `sensor_tools` and the calibration CSV), then:
 
 ```bash
-python lidar/packets_parse/foxglove/mcap_add_lidar_points.py input.mcap output.mcap -n 100
+python3 -m pip install -r requirements.txt
+python3 mcap_add_lidar_points.py input.mcap output.mcap -n 100
 ```
 
 Use `--topic` for an exact source channel and `--output-topic` to choose a unique

@@ -5,8 +5,9 @@ description = "从 MCAP 文件中提取万集 WLR-722Z 激光雷达点云"
 authors = [{name = "Your Team"}]
 requires-python = ">=3.10"
 dependencies = [
-    "my-sensor-tools>=0.2.0",
     "mcap>=1.2",
+    "mcap-ros2-support>=0.5",
+    "PyYAML>=6",
     "numpy>=1.20.0",
 ]
 

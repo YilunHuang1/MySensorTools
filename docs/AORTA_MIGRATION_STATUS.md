@@ -43,7 +43,7 @@ writes and GPIO changes need a concrete controlled test and recovery procedure.
 
 ## Verified results (2026-09-17)
 
-- 86 regression tests (84 core plus two BLE logging checks) pass in a clean Python 3.12 environment: ROS CDR and synthetic BFBS decoding, aliases and
+- 123 regression tests (including copied-folder workflows and two BLE logging checks) pass in a clean Python 3.12 environment: ROS CDR and synthetic BFBS decoding, aliases and
   ambiguity, bounded CLI parsing, missing-data reports, point fields and strides,
   image encodings, camera calibration models, serial framing/CRC/C5 extensions,
   and a real AprilTag detector with generated circle21h7 and blank frames.
@@ -140,3 +140,42 @@ Verified on 199 at `/app/uwb/smoke_test` after copying the folder and installing
 Anchor 5.2.4, Tag 0.2.20, CONNECTED/32%, zero current faults; 4 PASS / 1 WARN /
 1 SKIP, exit 2 because ranging is disabled. No service or ranging state changed.
 The earlier deployment and reports were backed up before replacement.
+
+## All-tool independent-folder correction (2026-09-17)
+
+The repository is a collection of independently copied tools. The 22 Python tool
+folders listed in [INDEPENDENT_TOOLS.md](INDEPENDENT_TOOLS.md) now carry their own
+requirements and the minimal shared runtime modules they use. Local configuration,
+LiDAR calibration, nested script imports, the truth-workflow installer and BLE
+deployment helper no longer depend on the repository root. The packaged IMU skill
+script is self-contained too. The legacy UWB bench remains byte-for-byte unchanged.
+
+Validation: 123 tests passed. Each independent directory was copied into a temporary
+location and run with Python site initialization disabled; dependency paths were
+added explicitly, so an editable root installation could not mask missing files.
+Tests check embedded-source consistency, entry points, seven synthetic data
+workflows and the full online-smoke path with simulated Aorta executables and
+five ranging samples at 20 Hz (PASS with an explicit 12 Hz threshold).
+
+Real-data replays from copied directories exported 273 historical UWB messages,
+parsed robot logs and IMU data, exported and processed 25 infrared frames, and
+created three LiDAR preview clouds using the calibration inside the copied folder.
+The independent LiDAR checker correctly returned FAIL on the previously anomalous
+recording: one CRC failure, one sequence discontinuity and no pointcloud channel.
+This is expected detection, not a new clean sensor sample.
+
+Online zero-frame handling now checks state before and after capture: two CONNECTED
+snapshots produce SKIP, two RANGING snapshots produce FAIL, and unknown/changing
+states remain WARN. Any skipped acceptance remains INCOMPLETE. The original ROS
+online check only subscribed with `ros2 topic hz /uwb/data`; it did not start ranging.
+Earlier in this session, CONNECTED/BLE plus a timeout from the independent official
+`aorta topic echo uwb/ranging --count 1` confirmed no ranging stream. The mechanism
+that enabled ranging in the user's older successful session cannot be reconstructed.
+
+The updated scripts were backed up and deployed to `/app/uwb/smoke_test` on 199.
+The 14:30 live run completed with 5 WARN / 1 SKIP, exit 2: firmware schemas were
+unavailable and state timed out. Read-only systemd inspection confirmed uwb.service
+had stopped successfully at 14:20:57, before this deployment/test; the fault snapshot
+also reported UWB link/signal timeouts. No service was started or stopped by this
+correction. Thus the latest run verifies independent execution and unavailable-service
+reporting, not physical ranging acceptance or live CONNECTED classification.

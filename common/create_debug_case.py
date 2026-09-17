@@ -12,10 +12,9 @@ import sys
 from pathlib import Path
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-DEBUG_CASES_ROOT = REPO_ROOT / "debug_cases"
-PRIMARY_CODEBASE = os.environ.get("VITA_ROBOT_ROOT", str(REPO_ROOT.parent / "vita-robot"))
-TOOLS_ROOT = REPO_ROOT
+DEBUG_CASES_ROOT = Path.cwd() / "debug_cases"
+PRIMARY_CODEBASE = os.environ.get("VITA_ROBOT_ROOT", "TODO")
+TOOLS_ROOT = Path(__file__).resolve().parent
 
 DATA_EXTS = {
     ".mcap",
@@ -42,6 +41,10 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--case-id", help="Case id. Defaults to timestamp plus inferred sensor.")
     parser.add_argument("--title", help="Human-readable title.")
+    parser.add_argument("--output-root", type=Path, default=DEBUG_CASES_ROOT,
+                        help="Case parent directory (default: ./debug_cases).")
+    parser.add_argument("--codebase", default=PRIMARY_CODEBASE,
+                        help="Optional vita-robot source path; no sibling checkout is assumed.")
     parser.add_argument("--time", dest="problem_time", help='Problem time in CST, e.g. "2026-05-13 14:24:54.240".')
     parser.add_argument("--symptom", help="Short problem description.")
     parser.add_argument("--fault-log", action="append", default=[], help="Fault log line. Can be repeated.")
@@ -250,7 +253,9 @@ Then update this report with the timeline, topic evidence, code path, and conclu
 
 
 def main() -> int:
+    global PRIMARY_CODEBASE
     args = parse_args()
+    PRIMARY_CODEBASE = args.codebase
     data_files, screenshot_files = collect_inputs(args.inputs)
     text = scan_text(data_files)
     primary_skill, sensor, _ = infer_sensor(" ".join([args.symptom or "", text]), data_files + screenshot_files)
@@ -259,7 +264,7 @@ def main() -> int:
     case_id = slugify(case_id)
     title = args.title or f"{case_id.replace('_', ' ')}"
 
-    case_dir = DEBUG_CASES_ROOT / case_id
+    case_dir = args.output_root / case_id
     if case_dir.exists() and not args.force:
         print(f"case already exists: {case_dir}", file=sys.stderr)
         return 2

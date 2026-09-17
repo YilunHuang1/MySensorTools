@@ -20,13 +20,12 @@ def main():
     if not re.fullmatch(r'/[A-Za-z0-9_./-]+', args.remote_dir) or '..' in Path(args.remote_dir).parts:
         parser.error('remote directory must be an absolute path without shell metacharacters')
     source = Path(__file__).resolve().parent
-    root = source.parents[1]
     with tempfile.TemporaryDirectory(prefix='uwb-deploy-') as temp:
         archive = Path(temp) / 'tool.tar.gz'
         with tarfile.open(archive, 'w:gz') as tar:
             for name in ['run_uwb_ble.py', 'SerialHandlerStandalone.py', 'CmdBuilder.py', 'PacketParser.py', 'crc16_utils.py', 'start_uwb.sh']:
                 tar.add(source / name, arcname=name)
-            for path in sorted((root / 'sensor_tools').glob('*.py')):
+            for path in sorted((source / 'sensor_tools').glob('*.py')):
                 tar.add(path, arcname='sensor_tools/' + path.name)
         remote = shlex.quote(args.remote_dir)
         # mkdir without -p is intentional: never overwrite an earlier installation.

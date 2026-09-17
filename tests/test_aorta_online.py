@@ -49,6 +49,19 @@ def test_rate_no_data_no_threshold_and_rollback():
     assert online.check_ranging_online(rows=rows[::-1])[0].status == CheckStatus.FAIL
 
 
+@pytest.mark.parametrize('before,after,expected', [
+    ('CONNECTED', 'CONNECTED', CheckStatus.SKIP),
+    (1, 1, CheckStatus.SKIP),
+    ('RANGING', 'RANGING', CheckStatus.FAIL),
+    ('CONNECTED', 'RANGING', CheckStatus.WARN),
+    (None, None, CheckStatus.WARN),
+    (True, True, CheckStatus.WARN),
+])
+def test_zero_frames_distinguishes_precondition_from_missing_stream(before, after, expected):
+    result, _ = online.check_ranging_online(rows=[], state_before=before, state_after=after)
+    assert result.status == expected
+
+
 def test_quality_counts_invalid_and_uses_circular_mean():
     rows = [dict(distance=1., distance_filtered=1., angle=a, angle_filtered=a, pitch=0, pos_confidence=90) for a in [179, -179]]
     result = online.check_data_quality_online(rows=rows)

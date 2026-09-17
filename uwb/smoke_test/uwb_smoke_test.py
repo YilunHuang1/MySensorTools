@@ -131,6 +131,7 @@ def run_online(args):
     print("[3/6] 检查 Tag 状态/电量...")
     r = check_uwb_status_online()
     report.add(r); _print_result(r)
+    state_before = r.data.get('state')
 
     print(f"[4/6] 检查测距功能 ({args.ranging_duration}s)...")
     try:
@@ -138,7 +139,13 @@ def run_online(args):
     except ERRORS as error:
         rows = []
         report.add(CheckResult("测距采集", CheckStatus.WARN, str(error)))
-    r, _ = check_ranging_online(rows=rows, min_frame_rate=args.min_frame_rate)
+    from sensor_tools import aorta
+    try:
+        state_after = aorta.echo('uwb/state')[0].get('state')
+    except ERRORS:
+        state_after = None
+    r, _ = check_ranging_online(rows=rows, min_frame_rate=args.min_frame_rate,
+                                state_before=state_before, state_after=state_after)
     report.add(r); _print_result(r)
 
     print(f"[5/6] 检查数据质量 ({args.ranging_duration}s)...")

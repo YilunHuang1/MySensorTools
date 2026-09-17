@@ -1,6 +1,6 @@
 # Infrared image tools
 
-Install the root package with the `analysis` extra. No ROS runtime is needed.
+Copy this folder and run `python3 -m pip install -r requirements.txt`. No ROS runtime or root project installation is needed.
 
 ```bash
 python infrared/raw_tools/read_local_raw.py frame.raw --width 640 --height 480 --encoding mono8 --output-dir output/ir

@@ -24,10 +24,9 @@ import argparse
 import json
 from fnmatch import fnmatch
 
-# 允许从父目录导入已有的解析逻辑
+# All executable dependencies live beside this script; parent paths below only locate optional input datasets.
 CUR_DIR = Path(__file__).resolve().parent
 PARENT_DIR = CUR_DIR.parent
-sys.path.append(str(PARENT_DIR))
 
 _MCAP_IMPORT_ERROR: Optional[BaseException] = None
 try:

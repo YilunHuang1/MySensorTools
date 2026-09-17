@@ -26,13 +26,18 @@ sensor test; physical acceptance limits are recorded separately.
 | `common/` | Cross-sensor utilities. |
 | `docs/` | Tool guide, migration notes, and Codex sensor skill references. |
 
-## Quick Start
+## 使用方式：按工具文件夹复制
+
+每个工具独立使用，无需安装整个仓库。复制目标文件夹时包含其中的
+`sensor_tools`、配置文件等子目录，在该文件夹执行：
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e ".[analysis,device,infrared,test]"
-python -m pytest -q
+python3 -m pip install -r requirements.txt
+python3 <工具脚本>.py --help
 ```
 
-See [docs/TOOLS_GUIDE.md](docs/TOOLS_GUIDE.md) for tool locations, usage examples, and maintenance rules.
+例如只复制 `uwb/smoke_test`，即可安装依赖并运行 `uwb_smoke_test.py`。
+[独立工具目录清单](docs/INDEPENDENT_TOOLS.md)列明每个复制单位及特殊系统依赖。
+根目录 `pyproject.toml` 仅供维护者开发/回归测试使用，不是用户部署前提。
+
+See [docs/TOOLS_GUIDE.md](docs/TOOLS_GUIDE.md) for commands and verification limits.

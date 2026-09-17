@@ -1,5 +1,16 @@
-# Run from the repository root. Installs the shared readers and analysis tools.
--e .[analysis,device,infrared]
-
-# Optional interactive point-cloud viewer: pip install open3d
-# Linux BLE peripheral mode additionally requires OS-provided dbus-python/PyGObject.
+# Optional all-tools dependency list for maintainers. Users use each tool folder requirements.txt.
+PyYAML>=6
+bleak>=0.22
+laspy>=2.5
+matplotlib>=3.9
+mcap-ros2-support>=0.5
+mcap>=1.2
+numpy>=1.24
+opencv-python>=4.8
+pandas>=2
+pillow>=9
+pupil-apriltags>=1.0.4.post11
+pyserial>=3.5
+rosbags>=0.10
+scipy>=1.10
+seaborn>=0.12

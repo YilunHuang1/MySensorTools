@@ -47,6 +47,7 @@ output/
 
 # Keep checked-in calibration CSV files.
 !lidar/packets_parse/config/calibration/*.csv
+!lidar/packets_parse/foxglove/Vanjee_722z_VA.csv
 
 # Local builds and private validation evidence
 *.egg-info/
