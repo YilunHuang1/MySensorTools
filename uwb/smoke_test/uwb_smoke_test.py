@@ -18,9 +18,6 @@ from datetime import datetime
 
 TOOL_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(TOOL_DIR))
-# Bundles keep dependencies private, without changing the robot's global Python.
-if (TOOL_DIR / '.deps').is_dir():
-    sys.path.insert(1, str(TOOL_DIR / '.deps'))
 
 from report import SmokeTestReport, CheckResult, CheckStatus
 
@@ -192,8 +189,8 @@ def main():
     missing = [name for name in required if importlib.util.find_spec(name) is None]
     if missing:
         parser.error('missing Python modules: ' + ', '.join(missing) +
-                     '. Deploy the complete smoke bundle and run bash install.sh; '
-                     'pip install -e ".[device]" requires the full repository/bundle root.')
+                     '. Copy the complete smoke_test folder (including sensor_tools), then run '
+                     'python3 -m pip install -r requirements.txt in that folder.')
 
     print()
     print("=" * 56)

@@ -43,7 +43,7 @@ writes and GPIO changes need a concrete controlled test and recovery procedure.
 
 ## Verified results (2026-09-17)
 
-- 85 regression tests (83 core plus two BLE logging checks) pass in a clean Python 3.12 environment: ROS CDR and synthetic BFBS decoding, aliases and
+- 86 regression tests (84 core plus two BLE logging checks) pass in a clean Python 3.12 environment: ROS CDR and synthetic BFBS decoding, aliases and
   ambiguity, bounded CLI parsing, missing-data reports, point fields and strides,
   image encodings, camera calibration models, serial framing/CRC/C5 extensions,
   and a real AprilTag detector with generated circle21h7 and blank frames.
@@ -120,23 +120,23 @@ writes and GPIO changes need a concrete controlled test and recovery procedure.
   as device acceptance. Public commits contain only tool code, synthetic fixtures
   and documentation; private capture files remain local.
 
-## Deployment correction (2026-09-17)
+## Single-directory deployment correction (2026-09-17)
 
-The original smoke validation used a staged shared package and explicit PYTHONPATH,
-so it did not cover a user copying only `uwb/smoke_test` into `/app/uwb/smoke_test`.
-That deployment lacked both `sensor_tools` and `mcap`. The source-only bundle now
-includes shared modules, a private dependency installer and an early actionable
-missing-module check. Isolated tests exclude the development editable installation
-and verify the deployed directory resolves both bundled source and `.deps`.
-The installer installs explicit runtime requirements rather than building the root
-project on the robot: the deployed packaging environment produced UNKNOWN metadata
-without dependencies during the first attempt. Imports must succeed before the
-installer reports success.
+The first migration mistakenly relied on a root-installed shared package and did
+not cover the original copy-folder workflow. The intermediate bundle/private
+installer added unnecessary steps and has been removed.
 
-Verified on 199 at `/app/uwb/smoke_test`, using the user's exact command after
-sourcing `/app/script/env.sh`, without a PYTHONPATH override:
-`python3 uwb_smoke_test.py --mode online --ranging-duration 15`.
-Anchor 5.2.4, Tag 0.2.20, CONNECTED with 30% battery, current FaultMgr zero faults;
-4 PASS / 1 WARN / 1 SKIP and exit 2 because ranging is intentionally disabled.
-The complete report was written successfully. No service or ranging state changed.
-The original directory was backed up before repair.
+`uwb/smoke_test` now includes the six shared modules it uses. Copy that complete
+folder, run `python3 -m pip install -r requirements.txt`, then run the existing
+`python3 uwb_smoke_test.py --mode online --ranging-duration 15` command.
+No root project install, archive builder, .deps directory or PYTHONPATH override
+is required. Regression tests run the copied directory without site packages and
+check that embedded modules match the shared source exercised by the test suite.
+The user-facing missing-dependency message points to this normal install command.
+
+Verified on 199 at `/app/uwb/smoke_test` after copying the folder and installing
+`requirements.txt` with system Python 3.10.12. The directory contained no `.deps`,
+`pyproject.toml` or installer. The unchanged 15-second online command completed:
+Anchor 5.2.4, Tag 0.2.20, CONNECTED/32%, zero current faults; 4 PASS / 1 WARN /
+1 SKIP, exit 2 because ranging is disabled. No service or ranging state changed.
+The earlier deployment and reports were backed up before replacement.

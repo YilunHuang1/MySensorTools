@@ -10,9 +10,10 @@ python -m pytest -q
 ```
 
 Normally the root installation is required even when running a script in a
-subdirectory. For copying UWB smoke tests alone to a robot, use the
-[self-contained smoke bundle](../uwb/smoke_test/README.md) and its private installer;
-copying only the smoke Python files omits required shared modules.
+subdirectory. UWB smoke tests are self-contained: copy the whole
+[`uwb/smoke_test` folder](../uwb/smoke_test/README.md), including its `sensor_tools`
+subdirectory, and run `python3 -m pip install -r requirements.txt` there.
+No root project installation, archive builder or private installer is needed.
 Offline readers do not need ROS. Linux BLE advertising additionally needs system
 BlueZ, `dbus-python` and PyGObject; these are not portable pip-only dependencies.
 Open3D is optional for interactive point-cloud windows; PNG export does not need it.

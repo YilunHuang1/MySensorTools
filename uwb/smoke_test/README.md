@@ -4,44 +4,20 @@
 本目录的 online 模式已迁移到 Aorta；`../bench_control` 是用户保留的旧 ROS
 台架工具，两者独立，不需要为了运行冒烟测试而执行台架流程。
 
-## 部署到机器人单目录（推荐）
+## 使用：复制文件夹、安装依赖、运行
 
-只复制本目录的几个 `.py` 文件是不完整的：online 还依赖共享的 `sensor_tools`、
-`mcap` 和 PyYAML。`pip install -e '.[device]'` 不能在缺少 `pyproject.toml`
-的目录执行。
-
-在开发机完整 MySensorTools 仓库根目录打包：
+把整个 `smoke_test` 文件夹复制到机器人，包含里面的 `sensor_tools` 子文件夹。
+所有运行代码已在这个文件夹里，不需要完整 MySensorTools 仓库、项目安装或打包。
 
 ```bash
-python3 uwb/smoke_test/build_bundle.py --output /tmp/uwb-smoke.tar.gz
-scp /tmp/uwb-smoke.tar.gz sh-dog-199-x5:/tmp/uwb-smoke.tar.gz
-```
-
-在机器人上解包、安装并运行（已有工具目录请先备份）：
-
-```bash
-mkdir -p /app/uwb/smoke_test
-tar -xzf /tmp/uwb-smoke.tar.gz -C /app/uwb/smoke_test
 cd /app/uwb/smoke_test
-bash install.sh
+python3 -m pip install -r requirements.txt
 source /app/script/env.sh
 python3 uwb_smoke_test.py --mode online --ranging-duration 15
 ```
 
-部署包包含共享模块和根 `pyproject.toml`；`install.sh` 把依赖装入本目录
-`.deps`，入口会自动加载，不需要设置 `PYTHONPATH`，也不改变全局 Python 包。
-后续部署新包后重新运行 `bash install.sh` 更新私有依赖。安装需要访问 Python 包源。
-
-## 完整仓库安装（另一种方式）
-
-仅当机器人上放了完整仓库时，在包含 `pyproject.toml` 的仓库根目录执行：
-
-```bash
-python3 -m pip install -e '.[device]'
-```
-
-下面带 `uwb/smoke_test/` 前缀的命令适用于完整仓库根目录；单目录部署时去掉
-该前缀，直接使用 `python3 uwb_smoke_test.py ...`。
+首次使用或更新依赖后运行安装命令；平时直接运行脚本即可。
+`pip install -e '.[device]'` 是完整仓库的开发安装命令，不用于这个文件夹。
 
 ## Online：不停服务的在线检查
 
@@ -49,8 +25,8 @@ python3 -m pip install -e '.[device]'
 
 ```bash
 source /app/script/env.sh
-python3 uwb/smoke_test/uwb_smoke_test.py --mode online --output-dir reports
-python3 uwb/smoke_test/uwb_smoke_test.py --mode online --ranging-duration 15 --output-dir reports
+python3 uwb_smoke_test.py --mode online --output-dir reports
+python3 uwb_smoke_test.py --mode online --ranging-duration 15 --output-dir reports
 ```
 
 online 模式**不主动开启测距**，也不修改配对、切换机器人模式或重启服务。
@@ -78,7 +54,7 @@ online 模式**不主动开启测距**，也不修改配对、切换机器人模
 需按现场流程记录原服务状态，并在测试完成或失败后恢复。
 
 ```bash
-python3 uwb/smoke_test/uwb_smoke_test.py --mode standalone \
+python3 uwb_smoke_test.py --mode standalone \
   --serial-port /dev/ttyS7 --allow-device-control --output-dir reports
 ```
 
@@ -93,3 +69,9 @@ python3 uwb/smoke_test/uwb_smoke_test.py --mode standalone \
 本地回归覆盖协议错误、断连、停止测距清理及在线缺数据分支；硬件实测范围见
 [逐工具验收表](../../docs/TOOL_VALIDATION_MATRIX.md)。串口模拟通过不代表已经完成
 Anchor 重启、BLE 配对和射频测距的物理验收。
+
+## 维护说明
+
+`./sensor_tools` 内置本工具使用的六个共享运行模块，以保证复制目录即可运行。
+修改仓库根目录对应模块时同步更新这些文件；回归测试检查两份源码一致，避免
+单目录版本和开发环境使用不同逻辑。用户无需执行同步或构建步骤。
