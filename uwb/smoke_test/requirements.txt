@@ -1,0 +1,6 @@
+# Runtime dependencies for online Aorta checks and standalone serial/BLE helpers.
+# Shared sensor_tools source is supplied by build_bundle.py, not fetched from PyPI.
+mcap>=1.2
+PyYAML>=6
+pyserial>=3.5
+bleak>=0.22

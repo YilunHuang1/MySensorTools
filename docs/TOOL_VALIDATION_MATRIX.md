@@ -40,6 +40,7 @@ pending. Private evidence is in ignored `.validation/` and is not a public fixtu
 | `uwb/vendor_compare/verify_quanji_1_2m_static.py` | Explicit CSV/output/prior-report paths; retains unadjusted source-angle audit | R: Quanji static CSV, recomputed JSON and charts |
 | `uwb/rosbag_tools/uwb.py` | No ROS runtime; preserve original MCAP, add derived channels; wrapped angles, unequal intervals, duplicate timestamp handling | S + R: 273 originals and 813 derivatives; insufficient data and ambiguous channels rejected |
 | `uwb/smoke_test/uwb_smoke_test.py`, `checks_online.py`, `report.py` | Passive Aorta firmware/state/ranging/FaultMgr checks; FAIL/INCOMPLETE propagation | S + L: versions/state/FaultMgr readable; no ranging -> INCOMPLETE, not PASS |
+| `uwb/smoke_test/build_bundle.py`, `install.sh` | Source-only archive includes shared modules; private `.deps` installation; no global package or service changes | S: execution outside checkout with site packages disabled, incomplete-directory diagnostic; L: user directory on 199, private install and exact 15-second online command completed; connected/not-ranging -> expected INCOMPLETE |
 | `uwb/smoke_test/checks_standalone.py`, `serial_comm.py`, `protocol.py`, `ble_comm.py` | Serial remains separate; exclusive open, CRC/C5 parser, cleanup, explicit control opt-in | S + C; P: isolated Anchor reboot, serial commands and BLE pairing |
 | `uwb/ble_tools/PacketParser.py`, `CmdBuilder.py`, `crc16_utils.py` | Shared multi-TLV/C5 parser, lengths/CRC, extended RSSI layout, malformed command rejection | S: fragmented stream, corrupt CRC, short/extended C5, Apple configuration |
 | `uwb/ble_tools/SerialHandlerStandalone.py`, `SerialHandler.py`, `libubitrap.py` | Shared serial-only path, no ROS message dependency; default passive, circular angle statistics, cleanup | S: statistics/logging and passive-control guard; P: physical serial session |
@@ -80,7 +81,7 @@ pending. Private evidence is in ignored `.validation/` and is not a public fixtu
 - Serial/BLE radio operation, SPI writes/restoration, physical AprilTag pose accuracy
   and GUI integrations have the limitations identified in their rows. Protocol
   simulation, build or replay evidence is not relabeled as physical acceptance.
-- Clean-environment installation and 83 regression tests (81 core plus two BLE logging checks) passed. Final publication
+- Clean-environment installation and 85 regression tests (83 core plus two BLE logging checks) passed. Final publication
   review and GitHub synchronization are recorded in AORTA_MIGRATION_STATUS.md.
 
 No private raw fixture, robot configuration or capture is committed. Existing local

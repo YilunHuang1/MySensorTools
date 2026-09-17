@@ -43,7 +43,7 @@ writes and GPIO changes need a concrete controlled test and recovery procedure.
 
 ## Verified results (2026-09-17)
 
-- 83 regression tests (81 core plus two BLE logging checks) pass in a clean Python 3.12 environment: ROS CDR and synthetic BFBS decoding, aliases and
+- 85 regression tests (83 core plus two BLE logging checks) pass in a clean Python 3.12 environment: ROS CDR and synthetic BFBS decoding, aliases and
   ambiguity, bounded CLI parsing, missing-data reports, point fields and strides,
   image encodings, camera calibration models, serial framing/CRC/C5 extensions,
   and a real AprilTag detector with generated circle21h7 and blank frames.
@@ -119,3 +119,24 @@ writes and GPIO changes need a concrete controlled test and recovery procedure.
 - The matrix documents GUI and physical accuracy limits rather than claiming them
   as device acceptance. Public commits contain only tool code, synthetic fixtures
   and documentation; private capture files remain local.
+
+## Deployment correction (2026-09-17)
+
+The original smoke validation used a staged shared package and explicit PYTHONPATH,
+so it did not cover a user copying only `uwb/smoke_test` into `/app/uwb/smoke_test`.
+That deployment lacked both `sensor_tools` and `mcap`. The source-only bundle now
+includes shared modules, a private dependency installer and an early actionable
+missing-module check. Isolated tests exclude the development editable installation
+and verify the deployed directory resolves both bundled source and `.deps`.
+The installer installs explicit runtime requirements rather than building the root
+project on the robot: the deployed packaging environment produced UNKNOWN metadata
+without dependencies during the first attempt. Imports must succeed before the
+installer reports success.
+
+Verified on 199 at `/app/uwb/smoke_test`, using the user's exact command after
+sourcing `/app/script/env.sh`, without a PYTHONPATH override:
+`python3 uwb_smoke_test.py --mode online --ranging-duration 15`.
+Anchor 5.2.4, Tag 0.2.20, CONNECTED with 30% battery, current FaultMgr zero faults;
+4 PASS / 1 WARN / 1 SKIP and exit 2 because ranging is intentionally disabled.
+The complete report was written successfully. No service or ranging state changed.
+The original directory was backed up before repair.

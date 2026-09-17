@@ -4,13 +4,44 @@
 本目录的 online 模式已迁移到 Aorta；`../bench_control` 是用户保留的旧 ROS
 台架工具，两者独立，不需要为了运行冒烟测试而执行台架流程。
 
-## 安装
+## 部署到机器人单目录（推荐）
 
-在仓库根目录执行：
+只复制本目录的几个 `.py` 文件是不完整的：online 还依赖共享的 `sensor_tools`、
+`mcap` 和 PyYAML。`pip install -e '.[device]'` 不能在缺少 `pyproject.toml`
+的目录执行。
+
+在开发机完整 MySensorTools 仓库根目录打包：
 
 ```bash
-pip install -e '.[device]'
+python3 uwb/smoke_test/build_bundle.py --output /tmp/uwb-smoke.tar.gz
+scp /tmp/uwb-smoke.tar.gz sh-dog-199-x5:/tmp/uwb-smoke.tar.gz
 ```
+
+在机器人上解包、安装并运行（已有工具目录请先备份）：
+
+```bash
+mkdir -p /app/uwb/smoke_test
+tar -xzf /tmp/uwb-smoke.tar.gz -C /app/uwb/smoke_test
+cd /app/uwb/smoke_test
+bash install.sh
+source /app/script/env.sh
+python3 uwb_smoke_test.py --mode online --ranging-duration 15
+```
+
+部署包包含共享模块和根 `pyproject.toml`；`install.sh` 把依赖装入本目录
+`.deps`，入口会自动加载，不需要设置 `PYTHONPATH`，也不改变全局 Python 包。
+后续部署新包后重新运行 `bash install.sh` 更新私有依赖。安装需要访问 Python 包源。
+
+## 完整仓库安装（另一种方式）
+
+仅当机器人上放了完整仓库时，在包含 `pyproject.toml` 的仓库根目录执行：
+
+```bash
+python3 -m pip install -e '.[device]'
+```
+
+下面带 `uwb/smoke_test/` 前缀的命令适用于完整仓库根目录；单目录部署时去掉
+该前缀，直接使用 `python3 uwb_smoke_test.py ...`。
 
 ## Online：不停服务的在线检查
 

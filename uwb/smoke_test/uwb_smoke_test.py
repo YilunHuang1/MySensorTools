@@ -13,10 +13,14 @@ UWB 固件冒烟测试工具
 
 import argparse
 import sys
-import os
+from pathlib import Path
 from datetime import datetime
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+TOOL_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(TOOL_DIR))
+# Bundles keep dependencies private, without changing the robot's global Python.
+if (TOOL_DIR / '.deps').is_dir():
+    sys.path.insert(1, str(TOOL_DIR / '.deps'))
 
 from report import SmokeTestReport, CheckResult, CheckStatus
 
@@ -182,6 +186,14 @@ def main():
         parser.error("duration and minimum frame rate must be positive")
     if args.mode == "standalone" and not args.allow_device_control:
         parser.error("standalone writes serial commands and reboots the Anchor; requires --allow-device-control")
+
+    import importlib.util
+    required = ['sensor_tools', 'mcap', 'yaml'] if args.mode == 'online' else ['sensor_tools', 'serial']
+    missing = [name for name in required if importlib.util.find_spec(name) is None]
+    if missing:
+        parser.error('missing Python modules: ' + ', '.join(missing) +
+                     '. Deploy the complete smoke bundle and run bash install.sh; '
+                     'pip install -e ".[device]" requires the full repository/bundle root.')
 
     print()
     print("=" * 56)
