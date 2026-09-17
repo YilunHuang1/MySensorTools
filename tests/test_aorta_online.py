@@ -40,6 +40,35 @@ def test_bad_version_does_not_pass(monkeypatch):
     assert online.check_anchor_version_online()[0].status == CheckStatus.WARN
 
 
+@pytest.mark.parametrize('fault_id,stamp,passed,expected', [
+    (0x40060102, 99, True, CheckStatus.PASS),
+    (0x40060102, 100, True, CheckStatus.WARN),
+    (0x40060102, 101, True, CheckStatus.WARN),
+    (0x40060102, None, True, CheckStatus.WARN),
+    (0x40060102, True, True, CheckStatus.WARN),
+    (0x40060102, 0, True, CheckStatus.WARN),
+    (0x40060102, 99, False, CheckStatus.WARN),
+    (0x40060101, 99, True, CheckStatus.WARN),
+])
+def test_only_old_timeout_with_passing_sample_is_non_blocking(monkeypatch, fault_id, stamp, passed, expected):
+    fault = dict(fault_id=fault_id, timestamp_ns=stamp, status=0)
+    monkeypatch.setattr(aorta, 'call', lambda *args: {'status': 'SUCCESS', 'error_code': 0, 'fault_info_array': [fault]})
+    result = online.check_error_status_online(capture_started_ns=100, ranging_passed=passed)
+    assert result.status == expected
+    assert result.data['faults'] == [fault]
+    assert result.data['non_blocking_faults'] == ([fault] if expected == CheckStatus.PASS else [])
+
+
+def test_old_timeout_does_not_hide_other_faults(monkeypatch):
+    old = dict(fault_id=0x40060102, timestamp_ns=99)
+    other = dict(fault_id=0x40060101, timestamp_ns=99)
+    monkeypatch.setattr(aorta, 'call', lambda *args: {'status': 'SUCCESS', 'error_code': 0, 'fault_info_array': [old, other]})
+    result = online.check_error_status_online(capture_started_ns=100, ranging_passed=True)
+    assert result.status == CheckStatus.WARN
+    assert result.data['blocking_faults'] == [other]
+    assert result.data['non_blocking_faults'] == [old]
+
+
 def test_rate_no_data_no_threshold_and_rollback():
     assert online.check_ranging_online(rows=[])[0].status == CheckStatus.WARN
     rows = [{'publish_time_ns': 1}, {'publish_time_ns': 50_000_001}]

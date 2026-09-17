@@ -111,7 +111,8 @@ def test_copied_tools_process_data(tmp_path, folder, entry, arguments, artifact)
         assert (tool / artifact).exists()
 
 
-def test_online_smoke_can_pass_ranging_in_copied_directory(tmp_path):
+@pytest.mark.parametrize('old_timeout', [False, True])
+def test_online_smoke_can_pass_ranging_in_copied_directory(tmp_path, old_timeout):
     tool = tmp_path / 'tool'; copy_tool('uwb/smoke_test', tool)
     synthetic_mcap(tool / 'source.mcap')
     # Substitute only robot executables: exercise capture, decode, checks and reporting.
@@ -120,7 +121,8 @@ def test_online_smoke_can_pass_ranging_in_copied_directory(tmp_path):
                    'a=sys.argv\n'
                    'if "echo" in a: r={"state":"RANGING","battery_percentage":80}\n'
                    'elif "firmware_version/uwb" in a: r={"status":"SUCCESS","versions":[{"name":"uwb_anchor","sw_version":"5.2.4"},{"name":"uwb_tag","sw_version":"0.2.20"}]}\n'
-                   'else: r={"status":"SUCCESS","error_code":0}\n'
+                   'else: r={"status":"SUCCESS","error_code":0,"fault_info_array":' +
+                   repr([dict(fault_id=0x40060102, timestamp_ns=1, status=0)] if old_timeout else []) + '}\n'
                    'print(json.dumps(r))\n')
     recorder = tool / 'fake_recorder'
     recorder.write_text('#!' + sys.executable + '\nimport shutil,sys\nfrom pathlib import Path\n'
@@ -136,3 +138,5 @@ def test_online_smoke_can_pass_ranging_in_copied_directory(tmp_path):
     ranging = next(r for r in report['results'] if r['name'] == '测距功能')
     assert ranging['data']['frame_count'] == 5 and ranging['data']['frame_rate'] == 20
     assert ranging['data']['min_frame_rate'] == 18
+    faults = next(r for r in report['results'] if r['name'] == '系统当前故障')
+    assert len(faults['data']['non_blocking_faults']) == int(old_timeout)

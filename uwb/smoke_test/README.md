@@ -40,13 +40,22 @@ online 模式**不主动开启测距**，也不修改配对、切换机器人模
 | Tag 状态、电量 | `uwb/state`；`CONNECTED` 和 `RANGING` 均为可接受连接状态 |
 | 测距帧率 | 录制 `uwb/ranging`，检查发布时钟和实际帧率；默认最低帧率 18 Hz，可用 `--min-frame-rate` 覆盖 |
 | 数据完整性 | 使用同一份采集数据，检查距离、角度、俯仰、滤波值和置信度；统计不等于定位精度验收 |
-| 当前故障 | `software/faultmgr/get_faults_info` 的 type 3 当前快照；这是系统全量结果，不是仅 UWB 的历史故障 |
+| 当前故障 | `software/faultmgr/get_faults_info` 的 type 3 系统全量当前快照；已被本轮有效测距验证覆盖的旧 UWB 超时只作参考 |
 
 默认以 18 Hz 为最低帧率：达到或超过 18 Hz 为 PASS，低于 18 Hz 为 FAIL。
 可通过 `--min-frame-rate` 指定其他阈值。
 采集前后均为 `CONNECTED` 且零帧时，测距项为 `SKIP`，整体 `INCOMPLETE`（退出码 2）。
 若采集前后均为 `RANGING` 却零帧，测距项为 `FAIL`（退出码 1）；状态不明或变化则保留 `WARN`。
 退出码 0 表示全部检查通过；退出码 1 表示至少一项明确失败。
+
+### 旧 UWB 超时记录不阻塞本轮验收
+
+对 `0x40060102`（UWB 测距链路超时），当故障时间早于本轮采集开始，且本轮
+测距帧率和数据完整性两项均为 PASS 时，该记录仅供参考，不影响整体 PASS。
+采集期间新上报的超时、时间不明的记录、其他故障仍参与原有判定；本轮无数据、
+帧率不达标或字段异常时也不会忽略旧超时。
+JSON 的 `faults` 保留完整快照，`non_blocking_faults` 列出不影响本轮结果的旧记录，
+`blocking_faults` 列出仍参与判定的记录。脚本不清除或修改 FaultMgr 中的故障。
 
 ## Standalone：隔离后直接检查 Anchor 串口
 

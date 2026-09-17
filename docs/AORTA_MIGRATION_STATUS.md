@@ -193,3 +193,23 @@ their existing classification. This correction uses regression tests, including
 33 focused tests passed; the physical Anchor reboot was not rerun.
 The previous 199 deployment path `/app/uwb/smoke_test` no longer existed when
 checking for a backup, so this correction was not copied to the device.
+
+## Non-blocking old UWB timeout (2026-09-17)
+
+An existing `0x40060102` from before the current capture no longer prevents PASS
+when both current ranging rate and data integrity pass. This is a smoke-test
+acceptance rule, not a claim that FaultMgr has restored the fault. Original fault
+records remain in JSON alongside blocking/non-blocking classification and capture
+start time. FaultMgr is never cleared or modified. New, undated, or other faults
+and unsuccessful current samples retain the previous behavior.
+
+43 focused tests passed, including copied-folder end-to-end online tests with and
+without an old timeout, new/unknown timestamps, failed current sampling and mixed
+faults.
+
+Deployed the correction to the existing independent smoke folder on 199 after
+backing up the changed files. At 14:55:08, a 15-second online test received 311
+frames at 20.76 Hz; all six checks passed (exit 0). The existing old UWB timeout
+remained in the report as non-blocking reference information. No service restart,
+fault clearing, or ranging-control operation was performed. Device report:
+`reports/smoke_test_report_20260917_145526.json`.

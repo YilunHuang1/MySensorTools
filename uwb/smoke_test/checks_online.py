@@ -116,17 +116,34 @@ def check_data_quality_online(duration=5, *, rows=None):
         return CheckResult('数据完整性', CheckStatus.WARN, str(error))
 
 
-def check_error_status_online():
+def check_error_status_online(*, capture_started_ns=None, ranging_passed=False):
     try:
         response = aorta.call('software/faultmgr/get_faults_info', {'type': 3, 'fault_list': []})
         if response.get('status') != 'SUCCESS' or response.get('error_code') != 0:
             raise ValueError(f'FaultMgr 查询未成功: {response}')
         # Empty FlatBuffers vectors can be omitted by the CLI; accept only after success.
         faults = response.get('fault_info_array') or []
-        if not isinstance(faults, list):
+        if not isinstance(faults, list) or any(not isinstance(f, dict) for f in faults):
             raise ValueError('malformed fault_info_array')
-        status = CheckStatus.WARN if faults else CheckStatus.PASS
-        return CheckResult('系统当前故障', status, f'当前故障 {len(faults)} 条（系统全量，非仅 UWB）',
-                           {'confirmed_current_snapshot': True, 'faults': faults})
+        blocking, non_blocking = [], []
+        for fault in faults:
+            stamp = fault.get('timestamp_ns')
+            # A restarted UWB process can leave an old timeout latched in FaultMgr.
+            # Only this known fault can be superseded by a successful current sample.
+            if (ranging_passed and fault.get('fault_id') == 0x40060102
+                    and type(stamp) is int and type(capture_started_ns) is int
+                    and 0 < stamp < capture_started_ns):
+                non_blocking.append(fault)
+            else:
+                blocking.append(fault)
+        status = CheckStatus.WARN if blocking else CheckStatus.PASS
+        detail = f'影响本轮结果的故障 {len(blocking)} 条（系统全量，非仅 UWB）'
+        if non_blocking:
+            detail += f'；{len(non_blocking)} 条采集前 UWB 超时记录，本轮测距通过，仅供参考'
+        return CheckResult('系统当前故障', status, detail,
+                           {'confirmed_current_snapshot': True, 'faults': faults,
+                            'blocking_faults': blocking, 'non_blocking_faults': non_blocking,
+                            'capture_started_ns': capture_started_ns,
+                            'ranging_passed': ranging_passed})
     except ERRORS as error:
         return CheckResult('系统当前故障', CheckStatus.WARN, str(error), {'confirmed_current_snapshot': False})

@@ -13,6 +13,7 @@ UWB 固件冒烟测试工具
 
 import argparse
 import sys
+import time
 from pathlib import Path
 from datetime import datetime
 
@@ -134,6 +135,7 @@ def run_online(args):
     state_before = r.data.get('state')
 
     print(f"[4/6] 检查测距功能 ({args.ranging_duration}s)...")
+    capture_started_ns = time.time_ns()
     try:
         rows = collect_ranging(args.ranging_duration)
     except ERRORS as error:
@@ -147,13 +149,16 @@ def run_online(args):
     r, _ = check_ranging_online(rows=rows, min_frame_rate=args.min_frame_rate,
                                 state_before=state_before, state_after=state_after)
     report.add(r); _print_result(r)
+    ranging_passed = r.status == CheckStatus.PASS
 
     print(f"[5/6] 检查数据质量 ({args.ranging_duration}s)...")
     r = check_data_quality_online(rows=rows)
     report.add(r); _print_result(r)
+    ranging_passed = ranging_passed and r.status == CheckStatus.PASS
 
     print("[6/6] 检查错误状态...")
-    r = check_error_status_online()
+    r = check_error_status_online(capture_started_ns=capture_started_ns,
+                                 ranging_passed=ranging_passed)
     report.add(r); _print_result(r)
 
     return report
