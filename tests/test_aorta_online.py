@@ -44,9 +44,18 @@ def test_rate_no_data_no_threshold_and_rollback():
     assert online.check_ranging_online(rows=[])[0].status == CheckStatus.WARN
     rows = [{'publish_time_ns': 1}, {'publish_time_ns': 50_000_001}]
     assert online.check_ranging_online(rows=rows)[1] == 20
-    assert online.check_ranging_online(rows=rows)[0].status == CheckStatus.WARN
+    assert online.check_ranging_online(rows=rows)[0].status == CheckStatus.PASS
+    assert online.check_ranging_online(rows=rows, min_frame_rate=None)[0].status == CheckStatus.WARN
     assert online.check_ranging_online(rows=rows, min_frame_rate=12)[0].status == CheckStatus.PASS
     assert online.check_ranging_online(rows=rows[::-1])[0].status == CheckStatus.FAIL
+
+
+@pytest.mark.parametrize('rate,expected', [(17, CheckStatus.FAIL), (18, CheckStatus.PASS), (20.84, CheckStatus.PASS)])
+def test_default_rate_threshold_is_18_hz(rate, expected):
+    rows = [{'publish_time_ns': round(i * 1e9 / rate)} for i in range(19)]
+    result, _ = online.check_ranging_online(rows=rows)
+    assert result.status == expected
+    assert result.data['min_frame_rate'] == 18
 
 
 @pytest.mark.parametrize('before,after,expected', [

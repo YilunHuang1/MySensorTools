@@ -88,8 +88,11 @@ def test_disconnect_still_attempts_stop(monkeypatch):
     assert comm.sent[-2] == checks.cmd_start_ranging()[0]
 
 
-def test_no_error_status_is_unknown_not_pass():
-    assert checks._make_error_result('errors', []).status == CheckStatus.WARN
+def test_no_error_status_is_normal_but_reported_errors_still_count():
+    assert checks._make_error_result('errors', []).status == CheckStatus.PASS
+    assert checks._make_error_result('errors', [0]).status == CheckStatus.PASS
+    assert checks._make_error_result('errors', [next(iter(checks.CRITICAL_ERROR_CODES))]).status == CheckStatus.FAIL
+    assert checks._make_error_result('errors', [0xff]).status == CheckStatus.WARN
 
 
 def test_quality_never_drops_invalid_frames_or_invents_rate_limit():

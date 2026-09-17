@@ -51,8 +51,9 @@ writes and GPIO changes need a concrete controlled test and recovery procedure.
   TLVs, short writes, disconnect cleanup and missing/rejected ranging setup ACKs.
   The current firmware's C5 34-byte declaration / 38-byte payload exception is
   handled only when its RSSI count proves the extension; an ordinary 34-byte C5
-  followed by another TLV remains separate. Missing error-status responses are
-  reported as unknown rather than a clean hardware result.
+  followed by another TLV remains separate. Per the confirmed firmware convention,
+  no standalone error-status report is normal (PASS); received errors retain
+  their severity classification.
 - Both MCAP derivative tools preserve original message order, empty registered
   channels, metadata and attachments in synthetic roundtrip tests. Non-finite
   point timestamps are rejected instead of silently changing scan boundaries.
@@ -179,3 +180,16 @@ had stopped successfully at 14:20:57, before this deployment/test; the fault sna
 also reported UWB link/signal timeouts. No service was started or stopped by this
 correction. Thus the latest run verifies independent execution and unavailable-service
 reporting, not physical ranging acceptance or live CONNECTED classification.
+
+## Confirmed smoke acceptance criteria (2026-09-17)
+
+The user confirmed a minimum online ranging rate of 18 Hz. It is now the default
+for both CLI and checker, with an optional command-line override. The user's
+313-frame, 20.84 Hz sample therefore meets this rate criterion. Standalone silence
+on the error-status channel is normal for this firmware and now produces PASS;
+reported critical/noncritical errors and independent heartbeat/CRC checks retain
+their existing classification. This correction uses regression tests, including
+17/18/20.84 Hz boundaries and copied-folder execution with no threshold argument;
+33 focused tests passed; the physical Anchor reboot was not rerun.
+The previous 199 deployment path `/app/uwb/smoke_test` no longer existed when
+checking for a backup, so this correction was not copied to the device.

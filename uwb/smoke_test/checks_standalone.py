@@ -178,7 +178,8 @@ def check_heartbeat_and_errors(comm: SerialComm, duration: float = 5.0,
 
 def _make_error_result(name: str, error_codes: list) -> CheckResult:
     if not error_codes:
-        return CheckResult(name=name, status=CheckStatus.WARN, detail='未收到有效错误状态，不能确认无错误')
+        # 此固件不要求周期上报无错误状态；监听窗口内无错误上报按正常判定。
+        return CheckResult(name=name, status=CheckStatus.PASS, detail='未收到错误状态上报，正常')
     critical = [c for c in error_codes if c in CRITICAL_ERROR_CODES]
     if critical:
         codes_str = ", ".join(f"0x{c:02X}({ERROR_STATUS.get(c, '?')})" for c in critical)

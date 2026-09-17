@@ -129,9 +129,10 @@ def test_online_smoke_can_pass_ranging_in_copied_directory(tmp_path):
     env = dict(os.environ, AORTA_CLI=str(cli), AORTA_RECORDER=str(recorder), AORTA_ENV_SCRIPT=str(tool / 'absent'))
     from unittest.mock import patch
     with patch.dict(os.environ, env, clear=True):
-        result = run_tool(tool, 'uwb_smoke_test.py', '--mode', 'online', '--ranging-duration', '1', '--min-frame-rate', '12')
+        result = run_tool(tool, 'uwb_smoke_test.py', '--mode', 'online', '--ranging-duration', '1')
     assert result.returncode == 0, (result.stdout, result.stderr)
     report = json.loads(next(tool.glob('smoke_test_report_*.json')).read_text())
     assert report['overall'] == 'PASS'
     ranging = next(r for r in report['results'] if r['name'] == '测距功能')
     assert ranging['data']['frame_count'] == 5 and ranging['data']['frame_rate'] == 20
+    assert ranging['data']['min_frame_rate'] == 18

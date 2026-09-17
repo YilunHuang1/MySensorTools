@@ -180,7 +180,8 @@ def main():
                         help="串口设备路径 (standalone, 默认 /dev/ttyS7)")
     parser.add_argument("--ranging-duration", type=float, default=10.0,
                         help="测距采集时长秒 (online, 默认 10)")
-    parser.add_argument("--min-frame-rate", type=float, help="部署配置中的最低帧率；不指定则帧率验收为未完成")
+    parser.add_argument("--min-frame-rate", type=float, default=18.0,
+                        help="测距最低帧率 Hz (默认 18，可覆盖)")
     parser.add_argument("--allow-device-control", action="store_true", help="允许 standalone 串口命令及 Anchor 重启；先人工隔离生产服务")
     parser.add_argument("--output-dir", default=".", help="报告输出目录")
     parser.add_argument("-v", "--verbose", action="store_true")

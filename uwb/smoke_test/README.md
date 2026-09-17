@@ -38,14 +38,14 @@ online 模式**不主动开启测距**，也不修改配对、切换机器人模
 |---|---|
 | Anchor、Tag 版本 | `firmware_version/uwb`，请求 `target_device_type: 3`，分别按设备名称读取返回版本 |
 | Tag 状态、电量 | `uwb/state`；`CONNECTED` 和 `RANGING` 均为可接受连接状态 |
-| 测距帧率 | 录制 `uwb/ranging`，检查发布时钟和实际帧率；`--min-frame-rate` 应填写部署配置中的阈值 |
+| 测距帧率 | 录制 `uwb/ranging`，检查发布时钟和实际帧率；默认最低帧率 18 Hz，可用 `--min-frame-rate` 覆盖 |
 | 数据完整性 | 使用同一份采集数据，检查距离、角度、俯仰、滤波值和置信度；统计不等于定位精度验收 |
 | 当前故障 | `software/faultmgr/get_faults_info` 的 type 3 当前快照；这是系统全量结果，不是仅 UWB 的历史故障 |
 
-不指定 `--min-frame-rate` 时只报告测量帧率，不擅自套用旧固件的固定阈值。
+默认以 18 Hz 为最低帧率：达到或超过 18 Hz 为 PASS，低于 18 Hz 为 FAIL。
+可通过 `--min-frame-rate` 指定其他阈值。
 采集前后均为 `CONNECTED` 且零帧时，测距项为 `SKIP`，整体 `INCOMPLETE`（退出码 2）。
 若采集前后均为 `RANGING` 却零帧，测距项为 `FAIL`（退出码 1）；状态不明或变化则保留 `WARN`。
-帧率阈值未指定时同样不会给出完整验收通过。
 退出码 0 表示全部检查通过；退出码 1 表示至少一项明确失败。
 
 ## Standalone：隔离后直接检查 Anchor 串口
@@ -60,7 +60,8 @@ python3 uwb_smoke_test.py --mode standalone \
 ```
 
 入口检查串口通信、版本、重启恢复、心跳、错误状态及 CRC。
-没有收到错误状态消息时报告未知，不等同于“没有硬件故障”。
+按当前固件约定，监听窗口内未收到错误状态上报视为正常，错误状态项为 PASS。
+收到严重错误仍为 FAIL，非致命错误仍为 WARN；心跳与 CRC 分别判定。
 底层解析器支持 CRC 校验、多 TLV、C5 扩展 RSSI 和已确认的固件长度例外。
 `checks_standalone.py` 另有可调用的测距辅助检查，但当前 standalone 入口不运行它们。
 

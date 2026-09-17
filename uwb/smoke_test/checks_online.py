@@ -57,7 +57,7 @@ def collect_ranging(duration):
         return list(iter_uwb_rows(path, 'uwb/ranging'))
 
 
-def check_ranging_online(duration=10, *, rows=None, min_frame_rate=None, state_before=None, state_after=None):
+def check_ranging_online(duration=10, *, rows=None, min_frame_rate=18.0, state_before=None, state_after=None):
     try:
         rows = collect_ranging(duration) if rows is None else rows
         stamps = [r['publish_time_ns'] for r in rows]
