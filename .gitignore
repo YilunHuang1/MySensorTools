@@ -47,3 +47,12 @@ output/
 
 # Keep checked-in calibration CSV files.
 !lidar/packets_parse/config/calibration/*.csv
+
+# Local builds and private validation evidence
+*.egg-info/
+.validation/
+build/
+dist/
+
+# Debug cases may reference private captures and contain robot logs
+debug_cases/

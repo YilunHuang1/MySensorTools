@@ -1,7 +1,8 @@
 import os
 import numpy as np
-from rosbags.rosbag2 import Reader
-from rosbags.serde import deserialize_cdr
+import argparse
+import json
+from sensor_tools.imu import iter_imu
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 
@@ -54,7 +55,9 @@ CONFIGS = {
 
 DURATION = 1.5  # 每段截取时长 (秒)
 TOPIC_NAME = '/imu_raw'
-OUTPUT_DIR = os.path.dirname(os.path.abspath(__file__))
+OUTPUT_DIR = 'output/vibration'
+GYRO_UNIT = 'dps'
+ACCEL_UNIT = 'g'
 
 # 显示配置
 COLORS = {'1_No_Pad': '#E74C3C', '2_Shell_Pad': '#3498DB', '3_Mount_Pad': '#2ECC71', '4_Mount_Pad_2': '#9B59B6'}
@@ -84,17 +87,9 @@ def extract_imu_data(bag_path, start_times, duration):
         print(f"  ⚠️  找不到路径 {bag_path}")
         return None
 
-    # 先读取 bag 中所有 IMU 数据（一次性读完，避免多次打开）
-    all_msgs = []
-    with Reader(bag_path) as reader:
-        connections = [x for x in reader.connections if x.topic == TOPIC_NAME]
-        if not connections:
-            print(f"  ⚠️  在 {bag_path} 中找不到 topic {TOPIC_NAME}")
-            return None
-        for connection, timestamp, rawdata in reader.messages(connections=connections):
-            t_sec = timestamp / 1e9
-            msg = deserialize_cdr(rawdata, connection.msgtype)
-            all_msgs.append((t_sec, msg))
+    all_msgs = [(log_ns / 1e9, gyro, accel)
+                for log_ns, _, _, gyro, accel in iter_imu(bag_path, TOPIC_NAME)]
+    all_msgs.sort(key=lambda item: item[0])
 
     if not all_msgs:
         print(f"  ⚠️  {bag_path} 中没有 IMU 数据")
@@ -109,7 +104,7 @@ def extract_imu_data(bag_path, start_times, duration):
         seg = {'time': [], 'gyro_x': [], 'gyro_y': [], 'gyro_z': [],
                'accel_x': [], 'accel_y': [], 'accel_z': []}
         count = 0
-        for t_sec, msg in all_msgs:
+        for t_sec, gyro, accel in all_msgs:
             if t_sec < start_time:
                 continue
             if t_sec > start_time + duration:
@@ -117,12 +112,12 @@ def extract_imu_data(bag_path, start_times, duration):
             # 段内相对时间
             t_rel = t_sec - start_time
             seg['time'].append(t_rel)
-            seg['gyro_x'].append(msg.angular_velocity.x)
-            seg['gyro_y'].append(msg.angular_velocity.y)
-            seg['gyro_z'].append(msg.angular_velocity.z)
-            seg['accel_x'].append(msg.linear_acceleration.x)
-            seg['accel_y'].append(msg.linear_acceleration.y)
-            seg['accel_z'].append(msg.linear_acceleration.z)
+            seg['gyro_x'].append(gyro[0])
+            seg['gyro_y'].append(gyro[1])
+            seg['gyro_z'].append(gyro[2])
+            seg['accel_x'].append(accel[0])
+            seg['accel_y'].append(accel[1])
+            seg['accel_z'].append(accel[2])
             count += 1
 
         if count == 0:
@@ -156,7 +151,7 @@ def compute_stats(data):
     """计算单组数据的统计量"""
     stats = {}
     for sensor in ['gyro', 'accel']:
-        unit = 'dps' if sensor == 'gyro' else 'g'
+        unit = GYRO_UNIT if sensor == 'gyro' else ACCEL_UNIT
         for axis in ['x', 'y', 'z']:
             key = f"{sensor}_{axis}"
             arr = data[key]
@@ -170,7 +165,7 @@ def compute_stats(data):
             }
     # 合成向量 RMS (三轴平方和开根号的 RMS)
     for sensor in ['gyro', 'accel']:
-        unit = 'dps' if sensor == 'gyro' else 'g'
+        unit = GYRO_UNIT if sensor == 'gyro' else ACCEL_UNIT
         magnitude = np.sqrt(data[f'{sensor}_x']**2 + data[f'{sensor}_y']**2 + data[f'{sensor}_z']**2)
         # 对加速度计减去静态重力 (约 1g)，计算振动分量
         if sensor == 'accel':
@@ -203,7 +198,7 @@ def print_stats_table(all_stats, baseline_key='1_No_Pad'):
     print("=" * 100)
 
     for sensor, sensor_name in [('gyro', '陀螺仪 (Gyroscope)'), ('accel', '加速度计 (Accelerometer)')]:
-        unit = 'dps' if sensor == 'gyro' else 'g'
+        unit = GYRO_UNIT if sensor == 'gyro' else ACCEL_UNIT
         print(f"\n{'─' * 100}")
         print(f"  {sensor_name}  [单位: {unit}]")
         print(f"{'─' * 100}")
@@ -257,12 +252,12 @@ def plot_time_domain(all_data, save_path):
     fig.suptitle('IMU Vibration: Time-Domain Comparison (Gyro + Accel)', fontsize=16, fontweight='bold')
 
     plot_configs = [
-        ('gyro_x',  'Gyro X (dps)',   'Pitch'),
-        ('gyro_y',  'Gyro Y (dps)',   'Roll'),
-        ('gyro_z',  'Gyro Z (dps)',   'Yaw'),
-        ('accel_x', 'Accel X (g)',    'Fore-Aft'),
-        ('accel_y', 'Accel Y (g)',    'Lateral'),
-        ('accel_z', 'Accel Z (g)',    'Vertical'),
+        ('gyro_x',  f'Gyro X ({GYRO_UNIT})',   'Pitch'),
+        ('gyro_y',  f'Gyro Y ({GYRO_UNIT})',   'Roll'),
+        ('gyro_z',  f'Gyro Z ({GYRO_UNIT})',   'Yaw'),
+        ('accel_x', f'Accel X ({ACCEL_UNIT})',    'Fore-Aft'),
+        ('accel_y', f'Accel Y ({ACCEL_UNIT})',    'Lateral'),
+        ('accel_z', f'Accel Z ({ACCEL_UNIT})',    'Vertical'),
     ]
 
     for idx, (key, ylabel, desc) in enumerate(plot_configs):
@@ -308,7 +303,7 @@ def plot_fft(all_data, save_path):
                 ax.plot(freqs, fft_mag, label=label,
                         color=COLORS[cond_name], alpha=0.8, linewidth=1.2)
 
-            unit = 'dps' if sensor == 'gyro' else 'g'
+            unit = GYRO_UNIT if sensor == 'gyro' else ACCEL_UNIT
             ax.set_title(f'{sensor_name} {axis_name}', fontsize=10)
             ax.set_ylabel(f'Amplitude ({unit})', fontsize=8)
             ax.set_xlabel('Frequency (Hz)', fontsize=8)
@@ -332,8 +327,8 @@ def plot_stats_bar(all_stats, save_path):
     width = 0.25
 
     for row, (sensor, sensor_name, unit) in enumerate([
-        ('gyro', 'Gyroscope', 'dps'),
-        ('accel', 'Accelerometer', 'g')
+        ('gyro', 'Gyroscope', GYRO_UNIT),
+        ('accel', 'Accelerometer', ACCEL_UNIT)
     ]):
         for col, (metric, metric_name) in enumerate([('rms', 'RMS'), ('peak_to_peak', 'Peak-to-Peak')]):
             ax = axs[row][col]
@@ -378,6 +373,36 @@ def save_stats_csv(all_stats, save_path):
 
 
 def main():
+    global CONFIGS, DURATION, TOPIC_NAME, OUTPUT_DIR, GYRO_UNIT, ACCEL_UNIT
+    parser = argparse.ArgumentParser(description="Compare IMU vibration windows from ROS bags or Aorta MCAP")
+    inputs = parser.add_mutually_exclusive_group(required=True)
+    inputs.add_argument('--config', help='JSON mapping condition names to path and starts (Unix seconds)')
+    inputs.add_argument('--legacy-example', action='store_true', help='Use historical example paths/windows')
+    parser.add_argument('--duration', type=float, default=1.5)
+    parser.add_argument('--topic', default='imu_raw')
+    parser.add_argument('--output-dir', default='output/vibration')
+    parser.add_argument('--gyro-unit', choices=['dps', 'rad/s'], required=True, help='Producer unit; no conversion is applied')
+    parser.add_argument('--accel-unit', choices=['g', 'm/s^2'], required=True, help='Producer unit; no conversion is applied')
+    args = parser.parse_args()
+    if args.duration <= 0:
+        parser.error('--duration must be positive')
+    if args.config:
+        with open(args.config) as stream:
+            CONFIGS = json.load(stream)
+        if not isinstance(CONFIGS, dict) or not CONFIGS:
+            parser.error('config must contain at least one named condition')
+        base = os.path.dirname(os.path.abspath(args.config))
+        for name, cfg in CONFIGS.items():
+            if not isinstance(cfg, dict) or 'path' not in cfg or not cfg.get('starts'):
+                parser.error(f'{name}: expected path and nonempty starts')
+            cfg['path'] = os.path.join(base, cfg['path'])
+            cfg['starts'] = [float(value) for value in cfg['starts']]
+    DURATION, TOPIC_NAME, OUTPUT_DIR = args.duration, args.topic, args.output_dir
+    GYRO_UNIT, ACCEL_UNIT = args.gyro_unit, args.accel_unit
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    palette = plt.get_cmap('tab10')
+    for index, name in enumerate(CONFIGS):
+        COLORS.setdefault(name, palette(index % 10))
     all_data = {}
     all_stats = {}
 
@@ -390,8 +415,8 @@ def main():
         start_times = cfg["starts"]
         print(f"\n正在处理: {LABELS_DISPLAY.get(condition_name, condition_name)} ({len(start_times)} 段) ...")
         data = extract_imu_data(bag_path, start_times, DURATION)
-        all_data[condition_name] = data
         if data is not None:
+            all_data[condition_name] = data
             n_total = len(data['time'])
             n_seg = data['n_segments']
             dt = np.mean(np.diff(data['time'][data['time'] < DURATION + 0.1])) if n_total > 1 else 0.01
@@ -400,7 +425,7 @@ def main():
 
     if not all_stats:
         print("❌ 没有有效数据，退出")
-        return
+        return 1
 
     # 2. 打印统计表
     print_stats_table(all_stats)
@@ -418,4 +443,7 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        raise SystemExit(main())
+    except (ValueError, OSError) as error:
+        raise SystemExit(f'error: {error}')

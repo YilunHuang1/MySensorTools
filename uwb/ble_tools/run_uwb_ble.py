@@ -221,6 +221,16 @@ class Service(dbus.service.Object):
 
 
 # ─── Register BLE App ──────────────────────────────────────────
+registration_errors = []
+
+
+def registration_failed(error):
+    registration_errors.append(str(error))
+    print(f'BLE registration failed: {error}')
+    if mainloop:
+        mainloop.quit()
+
+
 def register_app(bus):
     global tx_char_global
     service = Service(bus, 0, SERVICE_UUID)
@@ -246,9 +256,9 @@ def register_app(bus):
     try:
         gatt_manager.RegisterApplication(app.get_path(), {},
                                          reply_handler=lambda: print("✅ GATT service registered"),
-                                         error_handler=lambda e: print("❌ Failed to register GATT:", e))
+                                         error_handler=registration_failed)
     except Exception as e:
-        print("[GATT] register failure", e)
+        raise RuntimeError(f"GATT registration failed: {e}") from e
 
     # 注册广播
     ad_manager = dbus.Interface(bus.get_object(SERVICE_NAME, ADAPTER_PATH),
@@ -256,7 +266,7 @@ def register_app(bus):
     advert = Advertisement(bus, 0, "peripheral")
     ad_manager.RegisterAdvertisement(advert.get_path(), {},
                                      reply_handler=lambda: print("📡 BLE Advertising started (name: vita_0_01)"),
-                                     error_handler=lambda e: print("❌ Advertising error:", e))
+                                     error_handler=registration_failed)
 
 
 def shutdown_handler(signum, frame):
@@ -278,10 +288,16 @@ def main():
     parser.add_argument('--no-csv', action='store_true',
                         help='Disable CSV logging (default: enabled)')
     parser.add_argument('--csv-path', type=str, default=None,
-                        help='Custom CSV output path (default: /app/uwb_iphone/uwb_log_<timestamp>.csv)')
+                        help='Custom CSV output path (default: output/uwb/uwb_log_<timestamp>.csv)')
     parser.add_argument('--summary-interval', type=float, default=3.0,
                         help='Periodic summary interval in seconds (default: 3.0)')
+    parser.add_argument('--allow-device-control', action='store_true',
+                        help='Allow BLE advertising and serial configuration on an isolated bench device')
     args = parser.parse_args()
+    if not args.allow_device_control:
+        parser.error('BLE advertising and serial configuration require --allow-device-control; isolate production services first')
+    if args.summary_interval <= 0 or args.baudrate <= 0:
+        parser.error('summary-interval and baudrate must be positive')
 
     enable_csv = not args.no_csv
 
@@ -302,25 +318,33 @@ def main():
         enable_csv=enable_csv,
         csv_path=args.csv_path,
         summary_interval=args.summary_interval,
+        allow_control=True,
     )
-    serialHandler.start()
+    try:
+        serialHandler.start()
+        dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+        mainloop = GLib.MainLoop()
+        bus = dbus.SystemBus()
+        register_app(bus)
 
-    # 初始化 BLE
-    dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
-    bus = dbus.SystemBus()
-    register_app(bus)
+        def process_serial():
+            if serialHandler.quit:
+                registration_errors.append('Serial reader stopped')
+                mainloop.quit()
+                return False
+            serialHandler.process_packets()
+            return True
 
-    # 定时处理串口数据包
-    GLib.timeout_add(10, lambda: serialHandler.process_packets())
+        GLib.timeout_add(10, process_serial)
+        signal.signal(signal.SIGINT, shutdown_handler)
+        signal.signal(signal.SIGTERM, shutdown_handler)
+        print('Waiting for iPhone Qorvo Nearby Interaction; Ctrl+C to exit.')
+        mainloop.run()
+        if registration_errors:
+            raise RuntimeError('; '.join(registration_errors))
+    finally:
+        serialHandler.stop()
 
-    mainloop = GLib.MainLoop()
-    signal.signal(signal.SIGINT, shutdown_handler)
-    signal.signal(signal.SIGTERM, shutdown_handler)
-
-    print("\n🚀 Main loop running. Waiting for iPhone to connect...")
-    print("   Open Qorvo Nearby Interaction on iPhone, find 'vita_0_01'")
-    print("   Press Ctrl+C to exit.\n")
-    mainloop.run()
 
 
 if __name__ == "__main__":

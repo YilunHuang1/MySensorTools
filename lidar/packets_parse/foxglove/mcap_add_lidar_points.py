@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
 离线转换脚本：读取含 /lidar_packets 的 MCAP，
-解析万集 WLR-722Z 数据包，将每帧 /lidar_points 写入新 MCAP。
+解析万集 WLR-722Z 数据包，将每帧 /sensor_tools/lidar_points_preview 写入新 MCAP。
 
 生成的新 MCAP 可直接在 Foxglove Desktop 打开，
-在 3D panel 订阅 /lidar_points 即可可视化点云。
+在 3D panel 订阅 /sensor_tools/lidar_points_preview 即可可视化点云。
 
-输出 schema: sensor_msgs/PointCloud2 (ROS2)
+输出 schema: foxglove.PointCloud (JSON); original channels are preserved
   fields: x(f32), y(f32), z(f32), intensity(f32)
   frame_id: lidar
   is_bigendian: false
@@ -23,6 +23,8 @@ import sys
 import struct
 import math
 import time
+import tempfile
+from sensor_tools.lidar import iter_packet_messages
 import argparse
 from pathlib import Path
 
@@ -38,7 +40,7 @@ except ImportError:
 
 # ── 配置 ──────────────────────────────────────────────────────────────────────
 TOPIC_IN   = "/lidar_packets"
-TOPIC_OUT  = "/lidar_points"
+TOPIC_OUT  = "/sensor_tools/lidar_points_preview"
 FRAME_ID   = "lidar"
 
 # 校准文件路径 (相对本脚本目录)
@@ -256,6 +258,7 @@ def encode_foxglove_pointcloud(timestamp_ns, points):
 
 # ── 主流程 ────────────────────────────────────────────────────────────────────
 def main():
+    global TOPIC_IN, TOPIC_OUT
     parser = argparse.ArgumentParser(
         description="将 /lidar_packets MCAP 转换为含 /lidar_points 的新 MCAP"
     )
@@ -265,7 +268,12 @@ def main():
                         help=f"角度校准 CSV 路径 (默认: {CALIB_CSV})")
     parser.add_argument("--max-frames", "-n", type=int, default=None,
                         help="最多处理帧数 (默认: 全部)")
+    parser.add_argument('--topic', default=TOPIC_IN)
+    parser.add_argument('--output-topic', default=TOPIC_OUT)
     args = parser.parse_args()
+    TOPIC_IN, TOPIC_OUT = args.topic, args.output_topic
+    if args.max_frames is not None and args.max_frames <= 0:
+        parser.error('--max-frames must be positive')
 
     input_path = Path(args.input)
     if not input_path.exists():
@@ -274,6 +282,13 @@ def main():
 
     output_path = Path(args.output) if args.output else \
         input_path.with_name(input_path.stem + "_with_points.mcap")
+
+    if output_path.exists() or output_path.resolve() == input_path.resolve():
+        parser.error('output must be a new file, different from input')
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    from sensor_tools.mcap import channels
+    if any(channel.topic == TOPIC_OUT for channel in channels(input_path)):
+        parser.error('output topic already exists in input; choose --output-topic')
 
     calib_path = Path(args.calibration)
     if not calib_path.exists():
@@ -302,87 +317,117 @@ def main():
     pkt_crc_fail      = 0
     prev_azimuth_trans = -1
 
-    with open(input_path, 'rb') as fin, open(output_path, 'wb') as fout:
-        writer = Writer(fout)
-        writer.start()
+    with tempfile.TemporaryDirectory(prefix='.lidar-convert-', dir=output_path.parent) as directory:
+        temporary_path = Path(directory) / 'output.mcap'
+        with open(temporary_path, 'wb') as fout:
+            writer = Writer(fout)
+            writer.start()
 
-        # 注册 schema 和 channel (foxglove.PointCloud, jsonschema encoding)
-        schema_id = writer.register_schema(
-            name="foxglove.PointCloud",
-            encoding="jsonschema",
-            data=FOXGLOVE_PC_SCHEMA,
-        )
-        channel_id = writer.register_channel(
-            topic=TOPIC_OUT,
-            message_encoding="json",
-            schema_id=schema_id,
-        )
+            # 注册 schema 和 channel (foxglove.PointCloud, jsonschema encoding)
+            schema_id = writer.register_schema(
+                name="foxglove.PointCloud",
+                encoding="jsonschema",
+                data=FOXGLOVE_PC_SCHEMA,
+            )
+            channel_id = writer.register_channel(
+                topic=TOPIC_OUT,
+                message_encoding="json",
+                schema_id=schema_id,
+            )
 
-        reader = make_reader(fin)
-        for schema, channel, message in reader.iter_messages(topics=[TOPIC_IN]):
-            ts_ns = message.publish_time
+            for message in iter_packet_messages(input_path, TOPIC_IN):
+                ts_ns = message.publish_time
 
-            data_bytes = parse_cdr(message.data)
-            if not data_bytes:
-                continue
-
-            sub_pkts = extract_sub_packets(data_bytes)
-            for pkt in sub_pkts:
-                pkt_total += 1
-                result = decode_packet(pkt, vert_angles, horiz_angles)
-                if result is None:
-                    pkt_crc_fail += 1
+                data_bytes = message.data
+                if not data_bytes:
                     continue
 
-                azimuth, points = result
+                sub_pkts = extract_sub_packets(data_bytes)
+                for pkt in sub_pkts:
+                    pkt_total += 1
+                    result = decode_packet(pkt, vert_angles, horiz_angles)
+                    if result is None:
+                        pkt_crc_fail += 1
+                        continue
 
-                if frame_ts_ns is None:
-                    frame_ts_ns = ts_ns
+                    azimuth, points = result
 
-                # 帧切割（纯回落检测，对齐驱动逻辑）
-                azimuth_trans = (azimuth + 60) % 36000
-                if prev_azimuth_trans >= 0 and azimuth_trans < prev_azimuth_trans:
-                    if frame_points:
-                        frame_count += 1
-                        json_data = encode_foxglove_pointcloud(frame_ts_ns, frame_points)
-                        writer.add_message(
-                            channel_id=channel_id,
-                            log_time=frame_ts_ns,
-                            data=json_data,
-                            publish_time=frame_ts_ns,
-                        )
-                        print(f"  帧 {frame_count:4d}: {len(frame_points):6d} 点  "
-                              f"t={frame_ts_ns/1e9:.3f}s")
-                        frame_points = []
-                        frame_ts_ns  = None
+                    if frame_ts_ns is None:
+                        frame_ts_ns = ts_ns
 
-                        if args.max_frames and frame_count >= args.max_frames:
-                            print(f"\n已达到最大帧数 ({args.max_frames})，停止")
-                            break
+                    # 帧切割（纯回落检测，对齐驱动逻辑）
+                    azimuth_trans = (azimuth + 60) % 36000
+                    if prev_azimuth_trans >= 0 and azimuth_trans < prev_azimuth_trans:
+                        if frame_points:
+                            frame_count += 1
+                            json_data = encode_foxglove_pointcloud(frame_ts_ns, frame_points)
+                            writer.add_message(
+                                channel_id=channel_id,
+                                log_time=frame_ts_ns,
+                                data=json_data,
+                                publish_time=frame_ts_ns,
+                            )
+                            print(f"  帧 {frame_count:4d}: {len(frame_points):6d} 点  "
+                                  f"t={frame_ts_ns/1e9:.3f}s")
+                            frame_points = []
+                            frame_ts_ns  = None
 
-                prev_azimuth_trans = azimuth_trans
-                frame_points.extend(points)
+                            if args.max_frames and frame_count >= args.max_frames:
+                                print(f"\n已达到最大帧数 ({args.max_frames})，停止")
+                                break
 
-            else:
-                # 内层循环正常结束（未 break），继续外层
-                continue
-            break  # 内层触发 break，传播到外层
+                    prev_azimuth_trans = azimuth_trans
+                    if frame_ts_ns is None:
+                        frame_ts_ns = ts_ns
+                    frame_points.extend(points)
 
-        # 保存最后一帧
-        if frame_points:
-            frame_count += 1
-            json_data = encode_foxglove_pointcloud(
-                frame_ts_ns if frame_ts_ns else 0, frame_points
-            )
-            writer.add_message(
-                channel_id=channel_id,
-                log_time=frame_ts_ns or 0,
-                data=json_data,
-                publish_time=frame_ts_ns or 0,
-            )
-            print(f"  帧 {frame_count:4d}: {len(frame_points):6d} 点  (最后一帧)")
+                else:
+                    # 内层循环正常结束（未 break），继续外层
+                    continue
+                break  # 内层触发 break，传播到外层
 
-        writer.finish()
+            # 保存最后一帧
+            if frame_points:
+                frame_count += 1
+                json_data = encode_foxglove_pointcloud(
+                    frame_ts_ns if frame_ts_ns else 0, frame_points
+                )
+                writer.add_message(
+                    channel_id=channel_id,
+                    log_time=frame_ts_ns or 0,
+                    data=json_data,
+                    publish_time=frame_ts_ns or 0,
+                )
+                print(f"  帧 {frame_count:4d}: {len(frame_points):6d} 点  (最后一帧)")
+
+            # Preserve original schema bytes, messages, metadata and attachments unchanged.
+            with input_path.open('rb') as source:
+                reader = make_reader(source)
+                schemas, original_channels = {}, {}
+                summary = reader.get_summary()
+                if summary:
+                    for schema in summary.schemas.values():
+                        schemas[schema.id] = writer.register_schema(schema.name, schema.encoding, schema.data)
+                    for channel in summary.channels.values():
+                        original_channels[channel.id] = writer.register_channel(channel.topic, channel.message_encoding,
+                            schemas.get(channel.schema_id, 0), metadata=channel.metadata)
+                for schema, channel, message in reader.iter_messages(log_time_order=False):
+                    if schema and schema.id not in schemas:
+                        schemas[schema.id] = writer.register_schema(schema.name, schema.encoding, schema.data)
+                    if channel.id not in original_channels:
+                        original_channels[channel.id] = writer.register_channel(channel.topic, channel.message_encoding,
+                            schemas.get(channel.schema_id, 0), metadata=channel.metadata)
+                    writer.add_message(original_channels[channel.id], message.log_time, message.data,
+                                       message.publish_time, message.sequence)
+                for item in reader.iter_metadata():
+                    writer.add_metadata(item.name, item.metadata)
+                for item in reader.iter_attachments():
+                    writer.add_attachment(item.create_time, item.log_time, item.name, item.media_type, item.data)
+            writer.finish()
+
+        if not frame_count:
+            parser.error('no pointcloud frames decoded')
+        temporary_path.replace(output_path)
 
     elapsed = time.time() - t_start
     print(f"\n{'=' * 60}")

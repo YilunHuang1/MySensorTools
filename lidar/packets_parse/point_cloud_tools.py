@@ -7,29 +7,16 @@
 - 简单的体素滤波去噪
 """
 import os
+import re
 import glob
 import numpy as np
 from pathlib import Path
 
 
 def read_pcd_binary(pcd_path):
-    """读取 PCD binary 文件，返回 (n, 4) 数组 [x, y, z, intensity]"""
-    with open(pcd_path, 'rb') as f:
-        # 读取 header
-        n_points = None
-        while True:
-            line = f.readline().decode('ascii', errors='ignore').strip()
-            if line.startswith('POINTS'):
-                n_points = int(line.split()[1])
-            elif line.startswith('DATA'):
-                break
-
-        if n_points is None:
-            return None
-
-        # 读取二进制数据
-        data = np.frombuffer(f.read(n_points * 16), dtype=np.float32)
-        return data.reshape(n_points, 4)
+    """Read XYZI from either ASCII or binary PCD, honoring the declared types."""
+    from sensor_tools.pcd import xyzi
+    return xyzi(pcd_path)
 
 
 def write_pcd_binary(pcd_path, points_xyzi):
@@ -85,6 +72,11 @@ def voxel_downsample(points_xyzi, voxel_size=0.05):
     体素下采样（简单版本）
     将点云分成边长为 voxel_size 的体素，每个体素只保留一个点
     """
+    if not np.isfinite(voxel_size) or voxel_size <= 0:
+        raise ValueError('voxel_size must be finite and positive')
+    points_xyzi = points_xyzi[np.isfinite(points_xyzi[:, :3]).all(axis=1)]
+    if not len(points_xyzi):
+        return np.empty((0, 4), dtype=np.float32)
     xyz = points_xyzi[:, :3]
     intensity = points_xyzi[:, 3]
 
@@ -117,16 +109,14 @@ def merge_frames(pcd_dir, output_path, frame_range=None, voxel_downsample_size=N
     files = sorted(glob.glob(os.path.join(pcd_dir, 'frame_*.pcd')))
 
     if not files:
-        print(f"❌ 没有找到 PCD 文件")
-        return
+        raise ValueError("no PCD files found")
 
     if frame_range:
         start, end = frame_range
         files = [f for f in files if start <= int(Path(f).stem.split('_')[1]) <= end]
 
     if not files:
-        print(f"❌ 帧范围内没有文件")
-        return
+        raise ValueError("no files in requested frame range")
 
     print(f"📂 合并 {len(files)} 帧...")
     all_points = []
@@ -140,7 +130,12 @@ def merge_frames(pcd_dir, output_path, frame_range=None, voxel_downsample_size=N
             total_points += len(points)
             print(f"  [{'='*(i%10+1):10s}] Frame {frame_idx}: {len(points)} points")
 
+    if not all_points:
+        raise ValueError("no PCD files matched")
     merged = np.vstack(all_points)
+    merged = merged[np.isfinite(merged[:, :3]).all(axis=1)]
+    if not len(merged):
+        raise ValueError("no finite points")
     print(f"\n✓ 合并完成: {total_points} 个点")
 
     if voxel_downsample_size:
@@ -158,110 +153,83 @@ def merge_frames(pcd_dir, output_path, frame_range=None, voxel_downsample_size=N
     print(f"  强度: [{intensity.min():.1f}, {intensity.max():.1f}]")
 
     # 保存
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     write_pcd_binary(output_path, merged)
     print(f"\n✓ 已保存: {output_path}")
 
 
-def export_format(pcd_path, output_format='xyz'):
-    """
-    转换点云格式
-    
-    支持格式: pcd_ascii, xyz, ply (需 open3d)
-    """
-    print(f"📂 读取: {pcd_path}")
+def export_format(pcd_path, output_format='xyz', output_path=None):
+    """Export XYZI; additional source fields (ring/time) are not part of this view."""
     points = read_pcd_binary(pcd_path)
-
-    if points is None:
-        print("❌ 无法读取 PCD 文件")
-        return
-
-    base_path = Path(pcd_path).stem
-
+    if not len(points):
+        raise ValueError('empty point cloud')
+    suffix = '.pcd' if output_format == 'pcd_ascii' else '.' + output_format
+    output = Path(output_path) if output_path else Path(pcd_path).with_name(Path(pcd_path).stem + '_export' + suffix)
+    if output.resolve() == Path(pcd_path).resolve():
+        raise ValueError('output must differ from input')
+    output.parent.mkdir(parents=True, exist_ok=True)
     if output_format == 'pcd_ascii':
-        output = f"{base_path}_ascii.pcd"
         write_pcd_ascii(output, points)
-        print(f"✓ 已保存为 PCD ASCII: {output}")
-
     elif output_format == 'xyz':
-        output = f"{base_path}.xyz"
         write_xyz(output, points[:, :3])
-        print(f"✓ 已保存为 XYZ: {output}")
-
     elif output_format == 'ply':
-        try:
-            import open3d as o3d
-            output = f"{base_path}.ply"
-            pcd = o3d.geometry.PointCloud()
-            pcd.points = o3d.utility.Vector3dVector(points[:, :3])
-            o3d.io.write_point_cloud(output, pcd)
-            print(f"✓ 已保存为 PLY: {output}")
-        except ImportError:
-            print("❌ 需要安装 open3d: pip install open3d")
-
+        with output.open('w') as file:
+            file.write(f'ply\nformat ascii 1.0\nelement vertex {len(points)}\nproperty float x\nproperty float y\nproperty float z\nproperty float intensity\nend_header\n')
+            np.savetxt(file, points, fmt='%.9g')
     elif output_format == 'las':
-        try:
-            import open3d as o3d
-            output = f"{base_path}.las"
-            pcd = o3d.geometry.PointCloud()
-            pcd.points = o3d.utility.Vector3dVector(points[:, :3])
-            o3d.io.write_point_cloud(output, pcd)
-            print(f"✓ 已保存为 LAS: {output}")
-        except ImportError:
-            print("❌ 需要安装 open3d: pip install open3d")
-
+        import laspy
+        points = points[np.isfinite(points).all(axis=1)]
+        if not len(points):
+            raise ValueError('no finite LAS points')
+        header = laspy.LasHeader(point_format=0, version='1.2')
+        header.offsets = points[:, :3].min(axis=0)
+        header.scales = np.array([0.0001] * 3)
+        las = laspy.LasData(header)
+        las.x, las.y, las.z = points[:, 0], points[:, 1], points[:, 2]
+        las.intensity = np.clip(points[:, 3], 0, 65535).astype(np.uint16)
+        las.write(output)
     else:
-        print(f"❌ 不支持的格式: {output_format}")
+        raise ValueError(f'unsupported output format: {output_format}')
+    print(f'Saved: {output}')
+    return output
 
 
 def main():
+    import argparse
+    import subprocess
     import sys
-
-    if len(sys.argv) < 2:
-        print("高级点云处理工具")
-        print("\n用法:")
-        print("  python point_cloud_tools.py merge [frame_start] [frame_end]")
-        print("    合并帧范围内的所有点云 (无下采样)")
-        print("    例: python point_cloud_tools.py merge 1 10")
-        print()
-        print("  python point_cloud_tools.py merge_downsample [frame_start] [frame_end] [voxel_size]")
-        print("    合并并体素下采样")
-        print("    例: python point_cloud_tools.py merge_downsample 1 50 0.1")
-        print()
-        print("  python point_cloud_tools.py export [format]")
-        print("    转换单帧格式 (format: pcd_ascii, xyz, ply, las)")
-        print("    例: python point_cloud_tools.py export xyz")
-        print()
-        print("  python point_cloud_tools.py analyze")
-        print("    分析点云几何特性（同 analyze_pcd_quality.py）")
-        return
-
-    pcd_dir = 'pcd_output'
-
-    if sys.argv[1] == 'merge':
-        start = int(sys.argv[2]) if len(sys.argv) > 2 else 1
-        end = int(sys.argv[3]) if len(sys.argv) > 3 else 50
-        output = os.path.join(pcd_dir, f'merged_{start}_{end}.pcd')
-        merge_frames(pcd_dir, output, frame_range=(start, end))
-
-    elif sys.argv[1] == 'merge_downsample':
-        start = int(sys.argv[2]) if len(sys.argv) > 2 else 1
-        end = int(sys.argv[3]) if len(sys.argv) > 3 else 50
-        voxel_size = float(sys.argv[4]) if len(sys.argv) > 4 else 0.05
-        output = os.path.join(pcd_dir, f'merged_{start}_{end}_downsampled.pcd')
-        merge_frames(pcd_dir, output, frame_range=(start, end), voxel_downsample_size=voxel_size)
-
-    elif sys.argv[1] == 'export':
-        fmt = sys.argv[2] if len(sys.argv) > 2 else 'xyz'
-        pcd_path = os.path.join(pcd_dir, 'frame_0001.pcd')
-        export_format(pcd_path, output_format=fmt)
-
-    elif sys.argv[1] == 'analyze':
-        # 调用分析脚本
-        os.system('python analyze_pcd_quality.py')
-
-    else:
-        print(f"❌ 未知命令: {sys.argv[1]}")
+    parser = argparse.ArgumentParser(description=__doc__)
+    subs = parser.add_subparsers(dest='command', required=True)
+    for name in ['merge', 'merge_downsample']:
+        sub = subs.add_parser(name)
+        sub.add_argument('--pcd-dir', required=True)
+        sub.add_argument('--output', required=True)
+        sub.add_argument('--start', type=int)
+        sub.add_argument('--end', type=int)
+        if name == 'merge_downsample':
+            sub.add_argument('--voxel-size', type=float, default=.05)
+    sub = subs.add_parser('export')
+    sub.add_argument('input')
+    sub.add_argument('--format', choices=['pcd_ascii', 'xyz', 'ply', 'las'], default='xyz')
+    sub.add_argument('--output')
+    sub = subs.add_parser('analyze')
+    sub.add_argument('--pcd-dir', required=True)
+    args = parser.parse_args()
+    try:
+        if args.command.startswith('merge'):
+            if (args.start is None) != (args.end is None) or (args.start is not None and args.start > args.end):
+                parser.error('provide both --start and --end, with start <= end')
+            merge_frames(args.pcd_dir, args.output,
+                         frame_range=(args.start, args.end) if args.start is not None else None,
+                         voxel_downsample_size=getattr(args, 'voxel_size', None))
+        elif args.command == 'export':
+            export_format(args.input, args.format, args.output)
+        else:
+            return subprocess.call([sys.executable, str(Path(__file__).with_name('analyze_pcd_quality.py')), args.pcd_dir])
+    except (OSError, ValueError, ImportError) as error:
+        parser.exit(1, f'error: {error}\n')
+    return 0
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())

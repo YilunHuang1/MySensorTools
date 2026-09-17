@@ -1,3 +1,9 @@
+> Aorta migration (2026-09-17): install the repository root package first with
+> `pip install -e '.[analysis,device,infrared]'`. Offline MCAP readers accept embedded
+> CDR/BFBS/JSON schemas; live tools use Aorta. Historical ROS commands, fixed paths,
+> sample versions and results below are archival context. Use each updated entry's
+> `--help` and `docs/TOOLS_GUIDE.md` for current commands and verification limits.
+
 # UWB MCAP 处理工具（简洁版）
 
 本工具读取与现有数据一致的 MCAP（ROS2/CDR）文件，解析 UWB 消息并输出 CSV，同时提供 2D/3D 轨迹可视化。

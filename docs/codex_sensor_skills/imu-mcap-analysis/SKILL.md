@@ -1,6 +1,6 @@
 ---
 name: imu-mcap-analysis
-description: Analyze robot dog IMU faults from ROS2 MCAP bags, especially vita_slam IMU_DATA_ANOMALY, /imu_raw, /imu_raw_x5, and /lidar_imu issues. Use when debugging ASM330 or LiDAR ICM45688P IMU anomalies, acceleration norm thresholds, MCAP-only evidence, or deciding whether a fault comes from raw sensor data, ROS conversion, VQF, or slam ingestion.
+description: Analyze robot dog IMU faults from ROS CDR or Aorta MCAP files, especially vita_slam IMU_DATA_ANOMALY, /imu_raw, /imu_raw_x5, and /lidar_imu issues. Use when debugging ASM330 or LiDAR ICM45688P IMU anomalies, acceleration norm thresholds, MCAP-only evidence, or deciding whether a fault comes from raw sensor data, ROS conversion, VQF, or slam ingestion.
 ---
 
 # IMU MCAP Analysis
@@ -40,9 +40,9 @@ python3 <skill_dir>/scripts/analyze_imu_mcap.py logs <bag.mcap> \
   --log-keywords "IMU_DATA_ANOMALY,SPI,Accel Norm,GPS 0 buffer overflow"
 ```
 
-The script uses the Python `mcap` package and manual CDR decoding of `sensor_msgs/msg/Imu` and `rcl_interfaces/msg/Log`, so it does not require `ros2 bag` or `mcap_ros2`.
+The repository wrapper uses `sensor_tools.mcap` and embedded CDR/BFBS schemas, including vlog batches. Install the root package first. Read [the Aorta contract](../AORTA.md); units are preserved, not inferred or silently converted.
 
-## vita_slam Facts To Verify
+## Historical ROS facts to re-verify against Aorta adapters
 
 - Primary SLAM IMU comes from `vita-robot/src/application/vita_slam/vs_cfg/slam/slam.yaml`, usually `/imu_raw`.
 - `PrimaryImuCallback()` computes `acc_norm` directly from `sensor_msgs::msg::Imu::linear_acceleration` before `RosUtils::ToImuMeas()`.

@@ -5,6 +5,7 @@
 从 MCAP 文件中提取 /lidar_packets 并转换为 PCD 点云文件
 """
 
+from sensor_tools.lidar import iter_packet_messages
 import argparse
 import sys
 import time
@@ -145,49 +146,46 @@ def main():
     
     t_start = time.time()
     
-    with open(args.mcap, 'rb') as f:
-        reader = make_reader(f)
+    for message in iter_packet_messages(args.mcap, args.topic):
+        # 处理消息
+        timestamp_ns = message.publish_time
         
-        for schema, channel, message in reader.iter_messages(topics=[args.topic]):
-            # 处理消息
-            timestamp_ns = message.publish_time
+        if frame_start_timestamp_ns is None:
+            frame_start_timestamp_ns = timestamp_ns
+
+        results = extractor.process_message(message)
+        total_packets += 1
+
+        for azimuth, points, _ in results:
+            valid_pc_packets += 1
             
-            if frame_start_timestamp_ns is None:
-                frame_start_timestamp_ns = timestamp_ns
+            # 检测帧边界
+            if prev_azimuth >= 0:
+                if extractor.detect_frame_boundary(prev_azimuth, azimuth):
+                    # 保存上一帧
+                    if len(frame_points) > 0:
+                        frame_count += 1
+                        filepath = extractor.save_frame(
+                            frame_count, frame_points, frame_start_timestamp_ns
+                        )
+                        print(f"  帧 {frame_count:4d}: {len(frame_points):6d} 个点 -> {Path(filepath).name}")
+
+                        frame_points = []
+                        frame_start_timestamp_ns = timestamp_ns
+
+                        if args.max_frames and frame_count >= args.max_frames:
+                            print(f"\n已达到最大帧数限制 ({args.max_frames})")
+                            break
             
-            results = extractor.process_message(message)
-            total_packets += 1
-            
-            for azimuth, points, _ in results:
-                valid_pc_packets += 1
-                
-                # 检测帧边界
-                if prev_azimuth >= 0:
-                    if extractor.detect_frame_boundary(prev_azimuth, azimuth):
-                        # 保存上一帧
-                        if len(frame_points) > 0:
-                            frame_count += 1
-                            filepath = extractor.save_frame(
-                                frame_count, frame_points, frame_start_timestamp_ns
-                            )
-                            print(f"  帧 {frame_count:4d}: {len(frame_points):6d} 个点 -> {Path(filepath).name}")
-                            
-                            frame_points = []
-                            frame_start_timestamp_ns = timestamp_ns
-                            
-                            if args.max_frames and frame_count >= args.max_frames:
-                                print(f"\n已达到最大帧数限制 ({args.max_frames})")
-                                break
-                
-                prev_azimuth = azimuth
-                frame_points.extend(points)
-            
-            if args.max_frames and frame_count >= args.max_frames:
-                break
-            
-            if total_packets % 10000 == 0 and total_packets > 0:
-                print(f"  已处理 {total_packets} 个消息...")
-    
+            prev_azimuth = azimuth
+            frame_points.extend(points)
+
+        if args.max_frames and frame_count >= args.max_frames:
+            break
+
+        if total_packets % 10000 == 0 and total_packets > 0:
+            print(f"  已处理 {total_packets} 个消息...")
+
     # 保存最后一帧
     if len(frame_points) > 0 and (args.max_frames is None or frame_count < args.max_frames):
         frame_count += 1
@@ -196,13 +194,16 @@ def main():
     
     t_elapsed = time.time() - t_start
     
+    if not frame_count:
+        raise SystemExit("error: no valid point-cloud frames")
+
     # 打印统计
     print(f"\n{'='*60}")
     print(f"✅ 提取完成!")
     print(f"{'='*60}")
-    print(f"  总消息数:       {total_packets}")
+    print(f"  重组硬件包数:       {total_packets}")
     print(f"  有效点云包数:   {valid_pc_packets}")
-    print(f"  CRC 校验失败:   {crc_fail_count}")
+    print(f"  包校验失败:     {extractor.invalid_packet_count}")
     print(f"  导出帧数:       {frame_count}")
     print(f"  输出目录:       {args.output}")
     print(f"  耗时:           {t_elapsed:.1f} 秒")

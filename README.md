@@ -4,6 +4,16 @@ Curated sensor analysis and diagnosis tools for Vita robot work.
 
 This repository is organized by sensor type and contains only maintainable tool code, small configuration templates, calibration tables, and documentation. Raw captures, generated reports, model files, binary packages, and local debug artifacts are intentionally excluded from git.
 
+The migration targets `vita-robot` remote master, recorded in
+[the migration status](docs/AORTA_MIGRATION_STATUS.md). MCAP tools decode embedded
+ROS CDR or Aorta FlatBuffers schemas; no local ROS installation is required for
+these readers. Live tools use the deployed `aorta` and `aorta-record` executables.
+
+**Aorta migration:** see the status record and per-tool matrix for live, replay,
+synthetic and build verification coverage. The legacy UWB bench stays unchanged
+for its old ROS system. A tool receiving no data must not be treated as a passing
+sensor test; physical acceptance limits are recorded separately.
+
 ## Structure
 
 | Directory | Contents |
@@ -21,7 +31,8 @@ This repository is organized by sensor type and contains only maintainable tool 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -e ".[analysis,device,infrared,test]"
+python -m pytest -q
 ```
 
 See [docs/TOOLS_GUIDE.md](docs/TOOLS_GUIDE.md) for tool locations, usage examples, and maintenance rules.

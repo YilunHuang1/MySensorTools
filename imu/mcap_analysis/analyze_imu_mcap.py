@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Analyze ROS2 sensor_msgs/Imu topics in an MCAP file.
+"""Analyze ROS CDR and Aorta FlatBuffers IMU/log topics in MCAP.
 
-This script intentionally avoids ros2 CLI and mcap_ros2 dependencies. It reads
-MCAP records with the Python mcap package and decodes sensor_msgs/msg/Imu CDR
-payloads directly.
+Values retain producer units. Four-legged /imu_raw uses g and degrees/s;
+other topics must be checked against their producer before choosing thresholds.
 """
 
 from __future__ import annotations
@@ -17,6 +16,7 @@ from pathlib import Path
 from typing import Iterable
 
 from mcap.reader import make_reader
+from sensor_tools.mcap import iter_records, imu_fields, log_entries
 
 
 CST = timezone(timedelta(hours=8))
@@ -159,22 +159,10 @@ def iter_imu_samples(
     start_time_ns: int | None = None,
     end_time_ns: int | None = None,
 ) -> Iterable[ImuSample]:
-    with mcap_path.open("rb") as stream:
-        reader = make_reader(stream)
-        for _schema, channel, message in reader.iter_messages(
-            topics=topics,
-            start_time=start_time_ns,
-            end_time=end_time_ns,
-        ):
-            header_ns, frame_id, angular_velocity, acceleration = parse_imu_cdr(message.data)
-            yield ImuSample(
-                topic=channel.topic,
-                log_time_ns=message.log_time,
-                header_time_ns=header_ns,
-                frame_id=frame_id,
-                acceleration=acceleration,
-                angular_velocity=angular_velocity,
-            )
+    for record in iter_records(mcap_path, topics, start_time_ns, end_time_ns):
+        header_ns, frame_id, angular_velocity, acceleration = imu_fields(record)
+        yield ImuSample(record.topic, record.log_time_ns, header_ns, frame_id,
+                        acceleration, angular_velocity)
 
 
 def iter_log_records(
@@ -183,28 +171,10 @@ def iter_log_records(
     start_time_ns: int | None = None,
     end_time_ns: int | None = None,
 ) -> Iterable[LogRecord]:
-    with mcap_path.open("rb") as stream:
-        reader = make_reader(stream)
-        for _schema, channel, message in reader.iter_messages(
-            topics=topics,
-            start_time=start_time_ns,
-            end_time=end_time_ns,
-        ):
-            parsed = parse_log_cdr(message.data)
-            if parsed is None:
-                continue
-            stamp_ns, level, name, log_message, file, function, line = parsed
-            yield LogRecord(
-                topic=channel.topic,
-                log_time_ns=message.log_time,
-                stamp_ns=stamp_ns,
-                level=level,
-                name=name,
-                message=log_message,
-                file=file,
-                function=function,
-                line=line,
-            )
+    for record in iter_records(mcap_path, topics, start_time_ns, end_time_ns):
+        for stamp_ns, level, name, message, file, function, line in log_entries(record):
+            yield LogRecord(record.topic, record.log_time_ns, stamp_ns, level,
+                            name, message, file, function, line)
 
 
 def list_topics(mcap_path: Path) -> int:
@@ -242,12 +212,15 @@ def analyze(args: argparse.Namespace) -> int:
         start_ns = center_ns - window_ns
         end_ns = center_ns + window_ns
 
+    total_samples = 0
+    print("Units: unchanged from producer; norm thresholds use those same units.")
     for topic in topics:
         samples = list(iter_imu_samples(mcap_path, [topic], start_ns, end_ns))
         if not samples:
             print(f"\n{topic}: no samples")
             continue
 
+        total_samples += len(samples)
         norms = [sample.acc_norm for sample in samples]
         bad = [sample for sample in samples if sample.acc_norm < args.min_norm or sample.acc_norm > args.max_norm]
         print(f"\n{topic}")
@@ -279,7 +252,7 @@ def analyze(args: argparse.Namespace) -> int:
     if args.include_logs:
         print_logs(args, mcap_path, start_ns, end_ns)
 
-    return 0
+    return 0 if total_samples else 1
 
 
 def logs(args: argparse.Namespace) -> int:
@@ -293,8 +266,7 @@ def logs(args: argparse.Namespace) -> int:
         start_ns = center_ns - window_ns
         end_ns = center_ns + window_ns
 
-    print_logs(args, mcap_path, start_ns, end_ns)
-    return 0
+    return 0 if print_logs(args, mcap_path, start_ns, end_ns) else 1
 
 
 def print_logs(
@@ -302,7 +274,7 @@ def print_logs(
     mcap_path: Path,
     start_ns: int | None,
     end_ns: int | None,
-) -> None:
+) -> int:
     log_topics = args.log_topics.split(",")
     keywords = [item for item in (args.log_keywords or "").split(",") if item]
     records = list(iter_log_records(mcap_path, log_topics, start_ns, end_ns))
@@ -327,6 +299,7 @@ def print_logs(
 
     for record in records:
         print_log_record("   ", record)
+    return len(records)
 
 
 def print_sample(prefix: str, sample: ImuSample) -> None:
@@ -388,7 +361,10 @@ def main() -> int:
     logs_parser.set_defaults(func=logs)
 
     args = parser.parse_args()
-    return args.func(args)
+    try:
+        return args.func(args)
+    except (OSError, ValueError) as error:
+        parser.exit(1, f"error: {error}\n")
 
 
 if __name__ == "__main__":

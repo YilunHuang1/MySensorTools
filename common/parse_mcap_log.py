@@ -1,130 +1,77 @@
+#!/usr/bin/env python3
+"""Extract ROS CDR and Aorta FlatBuffers log channels from MCAP."""
 from pathlib import Path
 import argparse
-import struct
+import contextlib
+import os
+import tempfile
 
-DEFAULT_TOPIC_MAPPING = {
-    '/x5/vlog': 'x5_vlog.txt',
-    '/s100/vlog': 's100_vlog.txt',
-}
+from sensor_tools.mcap import iter_records, log_entries, topic_matches
+
+DEFAULT_TOPIC_MAPPING = {'/x5/vlog': 'x5_vlog.txt', '/s100/vlog': 's100_vlog.txt'}
+
 
 def get_log_level_str(level):
-    if level == 10: return "DEBUG"
-    if level == 20: return "INFO"
-    if level == 30: return "WARN"
-    if level == 40: return "ERROR"
-    if level == 50: return "FATAL"
-    return str(level)
+    return {0: 'UNKNOWN', 10: 'DEBUG', 20: 'INFO', 30: 'WARN', 40: 'ERROR', 50: 'FATAL'}.get(level, str(level))
+
 
 def extract_logs(bag_file: str, output_dir: str, topic_mapping: dict[str, str]):
+    output = Path(output_dir)
+    if not Path(bag_file).is_file():
+        raise FileNotFoundError(bag_file)
+    if len(set(topic_mapping.values())) != len(topic_mapping):
+        raise ValueError('output filenames must be unique')
+    for filename in topic_mapping.values():
+        if Path(filename).name != filename or filename in ('', '.', '..'):
+            raise ValueError('output filenames must be simple basenames')
+    output.mkdir(parents=True, exist_ok=True)
+    handles, temporary, counts = {}, {}, dict.fromkeys(topic_mapping, 0)
     try:
-        from mcap.reader import make_reader
-    except ImportError:
-        print("缺少依赖: 请安装 'mcap' 后重试")
-        return
+        with contextlib.ExitStack() as stack:
+            for record in iter_records(bag_file, topic_mapping):
+                for topic, filename in topic_mapping.items():
+                    if not topic_matches(record.topic, topic):
+                        continue
+                    for stamp, level, name, message, _, _, _ in log_entries(record):
+                        if topic not in handles:
+                            fd, temp = tempfile.mkstemp(prefix='.logs-', dir=output)
+                            temporary[topic] = Path(temp)
+                            handles[topic] = stack.enter_context(os.fdopen(fd, 'w', encoding='utf-8'))
+                        sec, nsec = divmod(stamp, 1_000_000_000)
+                        handles[topic].write(f'[{sec}.{nsec:09d}] [{get_log_level_str(level)}] [{name}]: {message}\n')
+                        counts[topic] += 1
+        if not sum(counts.values()):
+            raise ValueError('no matching log messages; inspect the MCAP channel list')
+        for topic, temp in temporary.items():
+            temp.replace(output / topic_mapping[topic])
+        for topic, count in counts.items():
+            print(f'{topic}: {count} log entries' + (' (not present)' if not count else ''))
+        return counts
+    finally:
+        for temp in temporary.values():
+            temp.unlink(missing_ok=True)
 
-    bag_path = Path(bag_file)
-    if not bag_path.exists():
-        print(f"文件不存在: {bag_file}")
-        return
 
-    output_path = Path(output_dir)
-    output_path.mkdir(parents=True, exist_ok=True)
-    file_handles = {
-        topic: open(output_path / filename, 'w')
-        for topic, filename in topic_mapping.items()
-    }
-
-    print(f"开始处理: {bag_path} ...")
-    count = 0
-
-    def _align(offset: int, align_bytes: int) -> int:
-        return offset + ((align_bytes - (offset % align_bytes)) % align_bytes)
-
-    def _read_int32(buf: bytes, offset: int):
-        offset = _align(offset, 4)
-        return struct.unpack_from("<i", buf, offset)[0], offset + 4
-
-    def _read_uint32(buf: bytes, offset: int):
-        offset = _align(offset, 4)
-        return struct.unpack_from("<I", buf, offset)[0], offset + 4
-
-    def _read_uint8(buf: bytes, offset: int):
-        return struct.unpack_from("<B", buf, offset)[0], offset + 1
-
-    def _read_string(buf: bytes, offset: int):
-        length, offset = _read_uint32(buf, offset)
-        s_bytes = buf[offset : offset + length]
-        s = s_bytes.decode("utf-8", errors="ignore").replace("\x00", "")
-        return s, offset + length
-
-    def parse_log_cdr(data: bytes):
-        try:
-            if len(data) < 4:
-                return None
-            offset = 4
-            sec, offset = _read_int32(data, offset)
-            nsec, offset = _read_uint32(data, offset)
-            level, offset = _read_uint8(data, offset)
-            offset = _align(offset, 4)
-            name, offset = _read_string(data, offset)
-            msg, offset = _read_string(data, offset)
-            file, offset = _read_string(data, offset)
-            function, offset = _read_string(data, offset)
-            line, offset = _read_uint32(data, offset)
-            return {
-                "sec": sec,
-                "nsec": nsec,
-                "level": level,
-                "name": name,
-                "msg": msg,
-                "file": file,
-                "function": function,
-                "line": line,
-            }
-        except Exception:
-            return None
-
-    with open(bag_path, "rb") as f:
-        reader = make_reader(f)
-        for topic in topic_mapping.keys():
-            for _, _, message in reader.iter_messages(topics=[topic]):
-                rec = parse_log_cdr(message.data)
-                if not rec:
-                    continue
-                time_str = f"{int(rec['sec'])}.{int(rec['nsec']):09d}"
-                level_str = get_log_level_str(int(rec['level']))
-                log_line = f"[{time_str}] [{level_str}] [{rec['name']}]: {rec['msg']}\n"
-                file_handles[topic].write(log_line)
-                count += 1
-                if count % 10000 == 0:
-                    print(f"已处理 {count} 条日志...")
-
-    for f in file_handles.values():
-        f.close()
-
-    print(f"处理完成！共提取 {count} 条日志。")
-    print(f"日志已保存到: {output_path.resolve()}")
-
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='从 MCAP 中提取 ROS 日志 topic')
-    parser.add_argument('mcap', help='输入 MCAP 文件')
-    parser.add_argument('-o', '--output-dir', default='logs', help='输出目录')
-    parser.add_argument(
-        '--topic',
-        action='append',
-        default=[],
-        metavar='TOPIC=FILE',
-        help='自定义 topic 到输出文件的映射，可重复传入，例如 /x5/vlog=x5.txt'
-    )
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('mcap')
+    parser.add_argument('-o', '--output-dir', default='logs')
+    parser.add_argument('--topic', action='append', default=[], metavar='TOPIC=FILE')
     args = parser.parse_args()
-
-    mapping = DEFAULT_TOPIC_MAPPING
+    mapping = DEFAULT_TOPIC_MAPPING.copy()
     if args.topic:
         mapping = {}
         for item in args.topic:
             topic, sep, filename = item.partition('=')
             if not sep or not topic or not filename:
-                parser.error(f'无效 --topic 映射: {item}')
+                parser.error(f'invalid --topic mapping: {item}')
             mapping[topic] = filename
+    try:
+        extract_logs(args.mcap, args.output_dir, mapping)
+    except (OSError, ValueError) as error:
+        parser.exit(1, f'error: {error}\n')
+    return 0
 
-    extract_logs(args.mcap, args.output_dir, mapping)
+
+if __name__ == '__main__':
+    raise SystemExit(main())

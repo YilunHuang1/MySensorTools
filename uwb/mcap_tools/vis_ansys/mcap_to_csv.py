@@ -25,7 +25,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
-from mcap.reader import make_reader
+from sensor_tools.uwb import iter_uwb_rows, detect_version_from_path
 
 
 # ---------------------- 日志配置 ----------------------
@@ -35,118 +35,6 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
 )
-
-
-# ---------------------- CDR 解析辅助 ----------------------
-
-def _align(offset: int, align_bytes: int) -> int:
-    return offset + ((align_bytes - (offset % align_bytes)) % align_bytes)
-
-
-def _read_uint8(buf: bytes, offset: int):
-    return struct.unpack_from("<B", buf, offset)[0], offset + 1
-
-
-def _read_bool(buf: bytes, offset: int):
-    val = struct.unpack_from("<B", buf, offset)[0]
-    return bool(val), offset + 1
-
-
-def _read_int32(buf: bytes, offset: int):
-    offset = _align(offset, 4)
-    return struct.unpack_from("<i", buf, offset)[0], offset + 4
-
-
-def _read_uint32(buf: bytes, offset: int):
-    offset = _align(offset, 4)
-    return struct.unpack_from("<I", buf, offset)[0], offset + 4
-
-
-def _read_float32(buf: bytes, offset: int):
-    offset = _align(offset, 4)
-    return struct.unpack_from("<f", buf, offset)[0], offset + 4
-
-
-def _read_string(buf: bytes, offset: int):
-    length, offset = _read_uint32(buf, offset)
-    # CDR 字符串可能包含内嵌的 NUL（\x00）作为终止符；清除以避免输出到CSV造成二进制判定
-    s_bytes = buf[offset : offset + length]
-    s = s_bytes.decode("utf-8", errors="ignore").replace("\x00", "")
-    return s, offset + length
-
-
-def _parse_header(buf: bytes, offset: int) -> Tuple[Dict[str, Any], int]:
-    """解析 ROS2 std_msgs/Header（CDR）"""
-    sec, offset = _read_int32(buf, offset)
-    nsec, offset = _read_uint32(buf, offset)
-    frame_id, offset = _read_string(buf, offset)
-    return {
-        "stamp_sec": int(sec),
-        "stamp_nsec": int(nsec),
-        "frame_id": frame_id,
-        "timestamp_sec": float(sec) + float(nsec) / 1e9,
-    }, offset
-
-
-def parse_uwb_message_cdr(data: bytes) -> Optional[Dict[str, Any]]:
-    """严格按 CDR 布局解析 UWB 消息。
-
-    消息字段：
-    std_msgs/Header header
-    uint8 rssi_len
-    float32 pitch
-    float32 angle
-    float32 distance
-    int8[] rssi
-    float32 angle_filtered
-    float32 distance_filtered
-    uint8 pos_confidence
-    bool has_living_body
-    bool has_head_touch
-    """
-    try:
-        if len(data) < 4:
-            return None
-        offset = 4  # 跳过 CDR 封装头
-
-        header, offset = _parse_header(data, offset)
-        rssi_len, offset = _read_uint8(data, offset)
-        pitch, offset = _read_float32(data, offset)
-        angle, offset = _read_float32(data, offset)
-        distance, offset = _read_float32(data, offset)
-
-        rssi_seq_len, offset = _read_uint32(data, offset)
-        rssi_bytes = data[offset : offset + rssi_seq_len]
-        rssi = (
-            list(struct.unpack("<" + "b" * rssi_seq_len, rssi_bytes))
-            if rssi_seq_len > 0
-            else []
-        )
-        offset += rssi_seq_len
-
-        angle_filtered, offset = _read_float32(data, offset)
-        distance_filtered, offset = _read_float32(data, offset)
-
-        pos_confidence, offset = _read_uint8(data, offset)
-        has_living_body, offset = _read_bool(data, offset)
-        has_head_touch, offset = _read_bool(data, offset)
-
-        return {
-            **header,
-            "rssi_len": int(rssi_len),
-            "pitch": float(pitch),
-            "angle": float(angle),
-            "distance": float(distance),
-            "rssi": rssi,
-            "angle_filtered": float(angle_filtered),
-            "distance_filtered": float(distance_filtered),
-            "pos_confidence": int(pos_confidence),
-            "has_living_body": bool(has_living_body),
-            "has_head_touch": bool(has_head_touch),
-        }
-    except Exception as exc:
-        logger.debug("CDR 解析错误: %s", exc)
-        return None
 
 
 # ---------------------- 角度与设备ID ----------------------
@@ -160,12 +48,6 @@ def normalize_angle(angle_deg: float, version: str) -> float:
         angle_deg = 360.0 + angle_deg
     return angle_deg % 360.0
 
-
-def detect_version_from_path(path: Path) -> str:
-    s = str(path).lower()
-    if "close_62" in s or "062" in s:
-        return "062"
-    return "007"
 
 
 def detect_device_id(path: Path) -> str:
@@ -197,8 +79,8 @@ def load_clean_config(cfg_path: Optional[Path]) -> CleanConfig:
         min_distance_m=float(section.get("min_distance_m", 0.0)),
         max_distance_m=float(section.get("max_distance_m", 50.0)),
         pos_confidence_min=int(section.get("pos_confidence_min", 0)),
-        drop_zero_distance=bool(section.get("drop_zero_distance", False)),
-        angle_normalize=bool(section.get("angle_normalize", True)),
+        drop_zero_distance=cp.getboolean("clean", "drop_zero_distance", fallback=False),
+        angle_normalize=cp.getboolean("clean", "angle_normalize", fallback=True),
         rssi_clip_min=int(section.get("rssi_clip_min", -100)),
         rssi_clip_max=int(section.get("rssi_clip_max", 0)),
     )
@@ -307,32 +189,12 @@ def mcap_to_records(
     device_id = detect_device_id(mcap_file)
     records: List[Dict[str, Any]] = []
 
-    with open(mcap_file, "rb") as f:
-        reader = make_reader(f)
-        try:
-            iter_msgs = reader.iter_messages(topics=[topic_name])
-        except Exception:
-            iter_msgs = reader.iter_messages()
-
-        message_count = 0
-        for schema, channel, message in iter_msgs:
-            message_count += 1
-            parsed = parse_uwb_message_cdr(message.data)
-            if not parsed:
-                continue
-
-            parsed["device_id"] = device_id
-            parsed["message_count"] = message_count
-            parsed["channel_topic"] = channel.topic if channel else ""
-
-            out = clean_and_augment(parsed, version, cfg)
-            if out:
-                # 将 rssi 列表序列化为 JSON 字符串以保证结构完整
-                out["rssi"] = json.dumps(out.get("rssi", []), ensure_ascii=False)
-                records.append(out)
-
-            if message_count % 1000 == 0:
-                logger.info("已处理 %d 条消息...", message_count)
+    for parsed in iter_uwb_rows(mcap_file, topic_name):
+        parsed["device_id"] = device_id
+        out = clean_and_augment(parsed, version, cfg)
+        if out:
+            out["rssi"] = json.dumps(out.get("rssi", []), ensure_ascii=False)
+            records.append(out)
 
     logger.info("总共处理了 %d 条消息", len(records))
     return records
@@ -380,44 +242,37 @@ def mcap_to_csv_stream(
         # misc
         "message_count",
         "channel_topic",
+        "timestamp_ns", "sync_cnt", "source_schema", "source_encoding",
+        "log_time_ns", "publish_time_ns",
     ]
 
     output_csv.parent.mkdir(parents=True, exist_ok=True)
 
-    with open(mcap_file, "rb") as f_in, open(output_csv, "w", newline="") as f_out:
-        writer = csv.DictWriter(f_out, fieldnames=fieldnames)
-        writer.writeheader()
-
-        reader = make_reader(f_in)
-        try:
-            iter_msgs = reader.iter_messages(topics=[topic_name])
-        except Exception:
-            iter_msgs = reader.iter_messages()
-
-        buffer: List[Dict[str, object]] = []
-        message_count = 0
-        for schema, channel, message in iter_msgs:
-            message_count += 1
-            parsed = parse_uwb_message_cdr(message.data)
-            if not parsed:
-                continue
-
-            parsed["device_id"] = device_id
-            parsed["message_count"] = message_count
-            parsed["channel_topic"] = channel.topic if channel else ""
-
-            out = clean_and_augment(parsed, version, cfg)
-            if out:
-                out["rssi"] = json.dumps(out.get("rssi", []), ensure_ascii=False)
-                buffer.append({k: out.get(k, np.nan) for k in fieldnames})
-
-            if len(buffer) >= flush_every:
-                writer.writerows(buffer)
-                buffer.clear()
-                logger.info("已写出 %d 条记录...", message_count)
-
-        if buffer:
-            writer.writerows(buffer)
+    if flush_every <= 0:
+        raise ValueError("flush_every must be positive")
+    # Write atomically so malformed input cannot leave an apparently valid partial CSV.
+    import tempfile
+    import os
+    fd, temp = tempfile.mkstemp(prefix=".uwb-", dir=output_csv.parent)
+    written = 0
+    try:
+        with os.fdopen(fd, "w", newline="", encoding="utf-8") as f_out:
+            writer = csv.DictWriter(f_out, fieldnames=fieldnames)
+            writer.writeheader()
+            for parsed in iter_uwb_rows(mcap_file, topic_name):
+                parsed["device_id"] = device_id
+                out = clean_and_augment(parsed, version, cfg)
+                if out:
+                    out["rssi"] = json.dumps(out.get("rssi", []), ensure_ascii=False)
+                    writer.writerow({key: out.get(key) for key in fieldnames})
+                    written += 1
+                    if written % flush_every == 0:
+                        f_out.flush()
+        if not written:
+            raise ValueError("no valid ranging messages after filtering")
+        Path(temp).replace(output_csv)
+    finally:
+        Path(temp).unlink(missing_ok=True)
 
     logger.info("✓ CSV 已保存：%s", output_csv)
 
@@ -437,7 +292,7 @@ def main() -> None:
     mcap_path = Path(args.mcap)
     if not mcap_path.exists():
         logger.error("MCAP 文件不存在：%s", mcap_path)
-        return
+        return 1
 
     cfg = load_clean_config(Path(args.config)) if args.config else CleanConfig()
 
@@ -454,12 +309,17 @@ def main() -> None:
         records = mcap_to_records(mcap_path, topic_name=args.topic, cfg=cfg)
         if not records:
             logger.error("未解析到有效数据")
-            return
+            return 1
         df = pd.DataFrame(records)
         out = Path(args.output) if args.output else mcap_path.with_suffix(".csv")
+        out.parent.mkdir(parents=True, exist_ok=True)
         df.to_csv(out, index=False)
         logger.info("✓ CSV 已保存：%s", out)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        raise SystemExit(main())
+    except (ValueError, OSError) as error:
+        logger.error("%s", error)
+        raise SystemExit(1)

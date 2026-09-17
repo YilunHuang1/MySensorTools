@@ -4,7 +4,7 @@ UWB 固件冒烟测试工具
 
 两种模式:
   standalone - 停止 uwb 服务，直接操作串口验证 Anchor (D6) 固件
-  online     - 通过 ROS2 接口在线检查 Anchor + Tag + 测距
+  online     - 通过 Aorta 接口在线检查 Anchor + Tag + 测距
 
 用法:
   python3 uwb_smoke_test.py --mode standalone --serial-port /dev/ttyS7
@@ -61,39 +61,43 @@ def run_standalone(args):
         n[0] += 1
         print(f"[{n[0]}/{total}] {label}...")
 
-    # 1+2: 串口通信 + Anchor 版本
-    step("检查串口通信 + Anchor 版本")
-    serial_r, version_r, anchor_ver = check_serial_and_version(comm, verbose=args.verbose)
-    report.add(serial_r); _print_result(serial_r)
-    report.add(version_r); _print_result(version_r)
-    if anchor_ver:
-        report.anchor_version = str(anchor_ver)
-    n[0] += 1
+    try:
+        # 1+2: 串口通信 + Anchor 版本
+        step("检查串口通信 + Anchor 版本")
+        serial_r, version_r, anchor_ver = check_serial_and_version(comm, verbose=args.verbose)
+        report.add(serial_r); _print_result(serial_r)
+        report.add(version_r); _print_result(version_r)
+        if anchor_ver:
+            report.anchor_version = str(anchor_ver)
+        n[0] += 1
 
-    # 3: Anchor 重启恢复
-    step("检查 Anchor 重启恢复")
-    r = check_anchor_reboot(comm, verbose=args.verbose)
-    report.add(r); _print_result(r)
+        # 3: Anchor 重启恢复
+        step("检查 Anchor 重启恢复")
+        r = check_anchor_reboot(comm, verbose=args.verbose)
+        report.add(r); _print_result(r)
 
-    # 4+5: 心跳 + 错误状态
-    step("检查 Anchor 心跳 + 错误状态")
-    hb_r, err_r = check_heartbeat_and_errors(comm, duration=5.0, verbose=args.verbose)
-    report.add(hb_r); _print_result(hb_r)
-    report.add(err_r); _print_result(err_r)
-    n[0] += 1
+        # 4+5: 心跳 + 错误状态
+        step("检查 Anchor 心跳 + 错误状态")
+        hb_r, err_r = check_heartbeat_and_errors(comm, duration=5.0, verbose=args.verbose)
+        report.add(hb_r); _print_result(hb_r)
+        report.add(err_r); _print_result(err_r)
+        n[0] += 1
 
-    # 6: CRC 完整性
-    step("检查 CRC 校验完整性")
-    r = check_crc_integrity(comm)
-    report.add(r); _print_result(r)
+        # 6: CRC 完整性
+        step("检查 CRC 校验完整性")
+        r = check_crc_integrity(comm)
+        report.add(r); _print_result(r)
 
-    comm.close()
+    finally:
+        comm.close()
     return report
 
 
 def run_online(args):
-    """Online 模式：不停服务，通过 ROS2 接口检查 Anchor + Tag + 测距。"""
+    """Online 模式：不停服务，通过 Aorta 接口检查 Anchor + Tag + 测距。"""
     from checks_online import (
+        collect_ranging,
+        ERRORS,
         check_anchor_version_online,
         check_tag_version_online,
         check_uwb_status_online,
@@ -105,12 +109,11 @@ def run_online(args):
     report = SmokeTestReport(mode="online",
                              timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 
-    import shutil
-    if not shutil.which("ros2"):
-        print("❌ 未找到 ros2 命令，请 source ROS2 环境")
-        sys.exit(1)
+    from sensor_tools.aorta import executable
+    executable("aorta")
+    executable("aorta-record")
 
-    print("🔍 Online 模式：通过 ROS2 接口检查 (不停服务)\n")
+    print("🔍 Online 模式：通过 Aorta 接口检查 (不停服务)\n")
 
     print("[1/6] 检查 Anchor 版本...")
     r, v = check_anchor_version_online()
@@ -129,11 +132,16 @@ def run_online(args):
     report.add(r); _print_result(r)
 
     print(f"[4/6] 检查测距功能 ({args.ranging_duration}s)...")
-    r, _ = check_ranging_online(duration=args.ranging_duration)
+    try:
+        rows = collect_ranging(args.ranging_duration)
+    except ERRORS as error:
+        rows = []
+        report.add(CheckResult("测距采集", CheckStatus.WARN, str(error)))
+    r, _ = check_ranging_online(rows=rows, min_frame_rate=args.min_frame_rate)
     report.add(r); _print_result(r)
 
     print(f"[5/6] 检查数据质量 ({args.ranging_duration}s)...")
-    r = check_data_quality_online(duration=args.ranging_duration)
+    r = check_data_quality_online(rows=rows)
     report.add(r); _print_result(r)
 
     print("[6/6] 检查错误状态...")
@@ -164,10 +172,16 @@ def main():
                         help="串口设备路径 (standalone, 默认 /dev/ttyS7)")
     parser.add_argument("--ranging-duration", type=float, default=10.0,
                         help="测距采集时长秒 (online, 默认 10)")
+    parser.add_argument("--min-frame-rate", type=float, help="部署配置中的最低帧率；不指定则帧率验收为未完成")
+    parser.add_argument("--allow-device-control", action="store_true", help="允许 standalone 串口命令及 Anchor 重启；先人工隔离生产服务")
     parser.add_argument("--output-dir", default=".", help="报告输出目录")
     parser.add_argument("-v", "--verbose", action="store_true")
 
     args = parser.parse_args()
+    if args.ranging_duration <= 0 or (args.min_frame_rate is not None and args.min_frame_rate <= 0):
+        parser.error("duration and minimum frame rate must be positive")
+    if args.mode == "standalone" and not args.allow_device_control:
+        parser.error("standalone writes serial commands and reboots the Anchor; requires --allow-device-control")
 
     print()
     print("=" * 56)
@@ -183,7 +197,7 @@ def main():
     filepath = report.save_json(args.output_dir)
     print(f"📄 报告已保存: {filepath}\n")
 
-    sys.exit(1 if report.summary.get(CheckStatus.FAIL, 0) > 0 else 0)
+    sys.exit(report.exit_code)
 
 
 if __name__ == "__main__":

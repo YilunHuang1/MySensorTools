@@ -41,8 +41,10 @@
   z = distance * sin(vert) + optcent_2_lidar_z
 """
 
+import argparse
 import struct
 import math
+from sensor_tools.lidar import iter_packet_messages
 import os
 import sys
 import time
@@ -56,7 +58,7 @@ TOPIC = '/lidar_packets'
 OUTPUT_DIR = 'pcd_output'
 
 # 角度校准文件
-ANGLE_CSV = 'config/calibration/Vanjee_722z_VA.csv'
+ANGLE_CSV = str(Path(__file__).resolve().parent / 'config/calibration/Vanjee_722z_VA.csv')
 
 # 最多导出多少帧 (None = 全部)
 # 使用 MCAP PTP 时间戳作为 PCD 文件名 (格式: frame_XXXX_TTTTTTTTTT.TTTTTTTTT.pcd，秒级含纳秒小数)
@@ -358,75 +360,75 @@ def main():
 
     t_start = time.time()
 
-    with open(MCAP_FILE, 'rb') as f:
-        reader = make_reader(f)
-        for schema, channel, message in reader.iter_messages(topics=[TOPIC]):
-            # 获取 MCAP 消息的 PTP 时间戳 (纳秒)
-            mcap_timestamp_ns = message.publish_time
-            
-            # 解析 CDR 消息，提取 data 字段
-            data_bytes = parse_vanjee_packet_cdr(message.data)
-            if data_bytes is None or len(data_bytes) == 0:
+    for message in iter_packet_messages(MCAP_FILE, TOPIC):
+        # 使用完成该硬件包的 MCAP 消息 publish_time；这不证明 PTP 同步
+        mcap_timestamp_ns = message.publish_time
+
+        # 解析 CDR 消息，提取 data 字段
+        data_bytes = message.data
+        if data_bytes is None or len(data_bytes) == 0:
+            continue
+
+        total_packets += 1
+
+        # 从数据流中提取子数据包
+        sub_packets = extract_sub_packets(data_bytes)
+
+        for pkt_type, pkt_data in sub_packets:
+            if pkt_type != 'pointcloud':
                 continue
 
-            total_packets += 1
+            result = decode_point_cloud_packet(pkt_data, vert_angles, horiz_angles)
+            if result is None:
+                crc_fail_count += 1
+                continue
 
-            # 从数据流中提取子数据包
-            sub_packets = extract_sub_packets(data_bytes)
+            azimuth, points = result
+            valid_pc_packets += 1
 
-            for pkt_type, pkt_data in sub_packets:
-                if pkt_type != 'pointcloud':
-                    continue
+            # 记录帧的起始时间戳
+            if frame_start_timestamp_ns is None:
+                frame_start_timestamp_ns = mcap_timestamp_ns
 
-                result = decode_point_cloud_packet(pkt_data, vert_angles, horiz_angles)
-                if result is None:
-                    crc_fail_count += 1
-                    continue
+            # 帧切割: azimuth 从大回小 (过零点)
+            # 修复：对齐驱动 SplitStrategyByAngle 的逻辑:
+            #   azimuth_trans = (azimuth + resolution) % 36000
+            #   触发条件: azimuth_trans < prev_azimuth_trans (纯回落检测)
+            # 原条件 "azimuth_trans < 60 and prev_azimuth > 100" 在 azimuth 跳过 0°
+            # 落在 [0.6°, 1.8°] 时 azimuth_trans 不满足 < 60，导致漏切。
+            if prev_azimuth >= 0:
+                azimuth_trans = (azimuth + 60) % 36000
+                if azimuth_trans < prev_azimuth_trans:
+                    # 保存当前帧
+                    if len(frame_points) > 0:
+                        frame_count += 1
+                        xyz = np.array([(p[0], p[1], p[2]) for p in frame_points], dtype=np.float32)
+                        intensity = np.array([p[3] for p in frame_points], dtype=np.float32)
 
-                azimuth, points = result
-                valid_pc_packets += 1
+                        # 使用 MCAP PTP 时间戳作为文件名 (秒级，含纳秒小数)
+                        timestamp_sec = frame_start_timestamp_ns / 1e9
+                        pcd_path = os.path.join(OUTPUT_DIR, f"frame_{frame_count:04d}_{timestamp_sec:.9f}.pcd")
+                        save_pcd(pcd_path, xyz, intensity)
+                        print(f"  帧 {frame_count:4d}: {len(frame_points):6d} 个点, 时间戳: {timestamp_sec:.9f} -> {os.path.basename(pcd_path)}")
 
-                # 记录帧的起始时间戳
-                if frame_start_timestamp_ns is None:
-                    frame_start_timestamp_ns = mcap_timestamp_ns
+                        frame_points = []
+                        frame_start_timestamp_ns = None
 
-                # 帧切割: azimuth 从大回小 (过零点)
-                # 修复：对齐驱动 SplitStrategyByAngle 的逻辑:
-                #   azimuth_trans = (azimuth + resolution) % 36000
-                #   触发条件: azimuth_trans < prev_azimuth_trans (纯回落检测)
-                # 原条件 "azimuth_trans < 60 and prev_azimuth > 100" 在 azimuth 跳过 0°
-                # 落在 [0.6°, 1.8°] 时 azimuth_trans 不满足 < 60，导致漏切。
-                if prev_azimuth >= 0:
-                    azimuth_trans = (azimuth + 60) % 36000
-                    if azimuth_trans < prev_azimuth_trans:
-                        # 保存当前帧
-                        if len(frame_points) > 0:
-                            frame_count += 1
-                            xyz = np.array([(p[0], p[1], p[2]) for p in frame_points], dtype=np.float32)
-                            intensity = np.array([p[3] for p in frame_points], dtype=np.float32)
+                        if MAX_FRAMES and frame_count >= MAX_FRAMES:
+                            print(f"\n已达到最大帧数限制 ({MAX_FRAMES})，停止提取")
+                            break
 
-                            # 使用 MCAP PTP 时间戳作为文件名 (秒级，含纳秒小数)
-                            timestamp_sec = frame_start_timestamp_ns / 1e9
-                            pcd_path = os.path.join(OUTPUT_DIR, f"frame_{frame_count:04d}_{timestamp_sec:.9f}.pcd")
-                            save_pcd(pcd_path, xyz, intensity)
-                            print(f"  帧 {frame_count:4d}: {len(frame_points):6d} 个点, 时间戳: {timestamp_sec:.9f} -> {os.path.basename(pcd_path)}")
+            prev_azimuth = azimuth
+            prev_azimuth_trans = (azimuth + 60) % 36000
+            if frame_start_timestamp_ns is None:
+                frame_start_timestamp_ns = mcap_timestamp_ns
+            frame_points.extend(points)
 
-                            frame_points = []
-                            frame_start_timestamp_ns = None
+        if MAX_FRAMES and frame_count >= MAX_FRAMES:
+            break
 
-                            if MAX_FRAMES and frame_count >= MAX_FRAMES:
-                                print(f"\n已达到最大帧数限制 ({MAX_FRAMES})，停止提取")
-                                break
-
-                prev_azimuth = azimuth
-                prev_azimuth_trans = (azimuth + 60) % 36000
-                frame_points.extend(points)
-
-            if MAX_FRAMES and frame_count >= MAX_FRAMES:
-                break
-
-            if total_packets % 10000 == 0:
-                print(f"  已处理 {total_packets} 个消息, 有效点云包 {valid_pc_packets}, 帧 {frame_count}")
+        if total_packets % 10000 == 0:
+            print(f"  已处理 {total_packets} 个消息, 有效点云包 {valid_pc_packets}, 帧 {frame_count}")
 
     # 保存最后一帧
     if len(frame_points) > 0 and (MAX_FRAMES is None or frame_count < MAX_FRAMES):
@@ -444,7 +446,7 @@ def main():
 
     print(f"\n{'=' * 60}")
     print(f"提取完成!")
-    print(f"  总消息数:       {total_packets}")
+    print(f"  重组硬件包数:       {total_packets}")
     print(f"  有效点云包数:   {valid_pc_packets}")
     print(f"  CRC 校验失败:   {crc_fail_count}")
     print(f"  导出帧数:       {frame_count}")
@@ -460,8 +462,26 @@ def main():
         print(f"     pcd = o3d.io.read_point_cloud('{OUTPUT_DIR}/frame_0001.pcd')")
         print(f"     o3d.visualization.draw_geometries([pcd])")
     else:
-        print("\n警告: 未提取到任何帧，请检查数据包格式")
+        raise ValueError("no valid LiDAR frames")
+
+
+def cli():
+    global MCAP_FILE, TOPIC, OUTPUT_DIR, ANGLE_CSV, MAX_FRAMES
+    parser = argparse.ArgumentParser(description='Extract diagnostic XYZI PCD from ROS/Aorta LiDAR packets; edge scans may be partial')
+    parser.add_argument('mcap')
+    parser.add_argument('--topic', default='/lidar_packets')
+    parser.add_argument('--output-dir', default='pcd_output')
+    parser.add_argument('--calibration', default=ANGLE_CSV)
+    parser.add_argument('--max-frames', type=int)
+    args = parser.parse_args()
+    if args.max_frames is not None and args.max_frames <= 0:
+        parser.error('--max-frames must be positive')
+    MCAP_FILE, TOPIC, OUTPUT_DIR, ANGLE_CSV, MAX_FRAMES = args.mcap, args.topic, args.output_dir, args.calibration, args.max_frames
+    try:
+        main()
+    except (OSError, ValueError) as error:
+        parser.exit(1, f'error: {error}\n')
 
 
 if __name__ == '__main__':
-    main()
+    cli()

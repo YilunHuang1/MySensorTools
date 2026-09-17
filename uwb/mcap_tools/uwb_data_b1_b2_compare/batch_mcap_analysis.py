@@ -22,6 +22,7 @@
 """
 
 import re
+import argparse
 from pathlib import Path
 import pandas as pd
 import numpy as np
@@ -41,7 +42,8 @@ def parse_truth_from_filename(filename: str):
     """解析文件名获取 (distance_cm, angle_deg, height_cm)。
     允许格式："50_30_25_0.mcap" 或类似，取前3个数字。
     """
-    nums = re.findall(r"-?\d+", filename)
+    match = re.fullmatch(r'(-?\d+)_(-?\d+)_(-?\d+)_(-?\d+)\.mcap', filename)
+    nums = match.groups() if match else []
     if len(nums) < 3:
         raise ValueError(f"文件名无法解析出3个真值参数: {filename}")
     dist_cm = int(nums[0])
@@ -69,7 +71,6 @@ def process_file(mcap_path: Path) -> pd.DataFrame:
         return df
 
     # 测距（m）优先使用滤波值
-    meas_dist_m = df['distance_filtered'].copy()
     if 'distance_filtered' in df.columns:
         meas_dist_m = df['distance_filtered'].fillna(df['distance'])
     else:
@@ -184,6 +185,18 @@ def write_report(stats_df: pd.DataFrame, total_rows: int, total_files: int):
 
 
 def main():
+    global DATASET_DIR, OUTPUT_ALL_CSV, OUTPUT_STATS_CSV, REPORT_MD, CHART_DIR
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('input_dir', type=Path)
+    parser.add_argument('--output-dir', type=Path, default=Path('output/uwb_batch'))
+    args = parser.parse_args()
+    DATASET_DIR = args.input_dir
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    OUTPUT_ALL_CSV = args.output_dir / 'uwb_all_data_with_diffs.csv'
+    OUTPUT_STATS_CSV = args.output_dir / 'uwb_diff_stats_summary.csv'
+    REPORT_MD = args.output_dir / 'uwb_analysis_report.md'
+    CHART_DIR = args.output_dir / 'charts'
+    failed = 0
     print(f"扫描目录: {DATASET_DIR}")
     if not DATASET_DIR.exists():
         raise FileNotFoundError(f"数据目录不存在: {DATASET_DIR}")
@@ -192,8 +205,7 @@ def main():
 
     files = sorted(DATASET_DIR.glob('*.mcap'))
     if not files:
-        print("未找到任何 .mcap 文件")
-        return
+        raise ValueError("未找到任何 .mcap 文件")
 
     print(f"共发现 {len(files)} 个 MCAP 文件，开始处理...")
     df_all_list = []
@@ -205,13 +217,14 @@ def main():
             if not df.empty:
                 df_all_list.append(df)
             else:
+                failed += 1
                 print(f"警告: {fp.name} 未解析到有效数据")
         except Exception as e:
+            failed += 1
             print(f"错误: 处理 {fp.name} 失败: {e}")
 
     if not df_all_list:
-        print("错误: 所有文件均未解析到数据")
-        return
+        raise ValueError("所有文件均未解析到数据")
 
     df_all = pd.concat(df_all_list, ignore_index=True)
     print(f"合并后总数据条数: {len(df_all)}")
@@ -232,5 +245,7 @@ def main():
     print(f"✓ 简要报告已保存: {REPORT_MD}")
 
 
+    return 1 if failed else 0
+
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())

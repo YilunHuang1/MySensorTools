@@ -95,7 +95,7 @@ LiDAR：
 UWB：
 
 ```text
-用 uwb-debug 看 /uwb/data 正常但跟随卡顿的原因。
+用 uwb-debug 看 uwb/ranging (legacy /uwb/data) 正常但跟随卡顿的原因。
 ```
 
 ## 当前 Skills 清单
@@ -108,7 +108,7 @@ UWB：
 | `lidar-debug` | LiDAR 深挖 | `/lidar_points`、`/lidar_imu`、VanJee 驱动、点云为空/稀疏、RTC/time sync |
 | `stereo-debug` | X5 双目深挖 | `/image_left_raw/*`、`/image_right_raw/*`、H265/NV12、ISP 状态、左右目时间同步 |
 | `infrared-debug` | 红外相机深挖 | `/infrared_camera/image_raw`、`/infrared_camera/video_h265`、SC202CS、红外补光、QR/充电感知 |
-| `uwb-debug` | UWB 深挖 | `/uwb/data`、`/uwb/state`、BLE 配对、anchor/tag、帧率、link timeout、head touch |
+| `uwb-debug` | UWB 深挖 | `uwb/ranging (legacy /uwb/data)`、`/uwb/state`、BLE 配对、anchor/tag、帧率、link timeout、head touch |
 
 ## 推荐排查流程
 

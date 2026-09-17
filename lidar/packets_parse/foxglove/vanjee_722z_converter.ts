@@ -1,7 +1,7 @@
 /**
  * Foxglove User Script — 万集 WLR-722Z 点云解析
  *
- * 订阅 /lidar_packets，实时解析为 /lidar_points (foxglove.PointCloud)
+ * 订阅 Aorta lidar_packets，实时解析为 /sensor_tools/lidar_points_preview (foxglove.PointCloud)
  * 在 Foxglove Desktop 的 3D panel 中直接可视化。
  *
  * 使用方法：
@@ -9,13 +9,13 @@
  *   2. 左侧边栏点击 "</>" (User Scripts) 图标，或菜单 View → User Scripts
  *   3. 点击左上角 "+" 新建脚本，将本文件全部内容粘贴进去
  *   4. Ctrl+S 保存（顶部无红色报错即编译成功）
- *   5. 添加 3D panel，订阅 /lidar_points，点云即可显示
+ *   5. 添加 3D panel，订阅 /sensor_tools/lidar_points_preview，点云即可显示
  *
  * 协议参考: vanjee_driver/decoder/decoder_vanjee_722z.hpp
  * 角度校准: Vanjee_722z_VA.csv (16 通道)
  */
 
-import { Input, Message } from "./types.ts";
+import type { Input, Message } from "./types.ts";
 
 // ── 角度校准表 (来自 Vanjee_722z_VA.csv，CH0~CH15) ───────────────────────────
 const CHANNEL_ANGLES: [number, number][] = [
@@ -46,8 +46,9 @@ const DISTANCE_MIN    = 0.01;
 const DISTANCE_MAX    = 100.0;
 
 // ── User Script 元数据 ────────────────────────────────────────────────────────
-export const inputs = ["/lidar_packets"];
-export const output = "/lidar_points";
+// Set this exact recorded/bridge channel for your group; historical MCAP may use /lidar_packets.
+export const inputs = ["aorta/default/pub/lidar_packets"];
+export const output = "/sensor_tools/lidar_points_preview";
 
 export const datatypes = new Map([
   ["foxglove.PointCloud", { definitions: [
@@ -94,44 +95,33 @@ function crc32mpeg2(buf: Uint8Array, len: number): number {
   return crc >>> 0;
 }
 
-// ── CDR 解析：提取 VanjeelidarPacket.data 字节数组 ───────────────────────────
-function parseCDR(raw: Uint8Array): Uint8Array | null {
-  if (raw.length < 20) return null;
-  const view = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
-  let offset = 4;
-  offset += 8;                                      // stamp.sec + stamp.nanosec
-  const strLen = view.getUint32(offset, true);
-  offset += 4 + strLen;
-  offset = (offset + 3) & ~3;                       // 4-byte align
-  const dataLen = view.getUint32(offset, true);
-  offset += 4;
-  return raw.subarray(offset, offset + dataLen);
-}
-
-// ── 从 data 字节流扫描 80 字节点云子包 ───────────────────────────────────────
-function extractSubPackets(data: Uint8Array): Uint8Array[] {
+// Raw serial packets can span multiple Aorta/MCAP messages.
+let pending = new Uint8Array(0);
+function extractSubPackets(chunk: Uint8Array): Uint8Array[] {
+  const data = new Uint8Array(pending.length + chunk.length);
+  data.set(pending); data.set(chunk, pending.length);
   const result: Uint8Array[] = [];
   let i = 0;
-  while (i < data.length - 1) {
-    if (data[i] !== 0xEE) { i++; continue; }
-    if (data[i + 1] === 0xFF) {
+  while (i + 2 <= data.length) {
+    let length = 0;
+    let points = false;
+    if (data[i] === 0xEE && data[i + 1] === 0xDD) length = 41;
+    else if (data[i] === 0xEE && data[i + 1] === 0xFF) {
       if (i + 6 > data.length) break;
-      const dtype = data[i + 5]!;
-      if (dtype === 0x00 && i + 80 <= data.length) {
-        result.push(data.subarray(i, i + 80));
-        i += 80;
-      } else if (dtype === 0x01 && i + 34 <= data.length) {
-        i += 34;
-      } else { i++; }
-    } else if (data[i + 1] === 0xDD) {
-      i += (i + 41 <= data.length) ? 41 : 1;
-    } else { i++; }
+      if (data[i + 5] === 0) { length = 80; points = true; }
+      else if (data[i + 5] === 1) length = 34;
+      else { i++; continue; }
+    } else { i++; continue; }
+    if (i + length > data.length) break;
+    if (points) result.push(data.slice(i, i + length));
+    i += length;
   }
+  pending = data.slice(i);
   return result;
 }
 
-// ── 解析单个 80 字节点云包 → {azimuth01, 点列表} ─────────────────────────────
 type Point3 = { x: number; y: number; z: number; intensity: number };
+
 type DecodeResult = { azimuth01: number; points: Point3[] };
 
 function decodePacket(pkt: Uint8Array): DecodeResult | null {
@@ -172,9 +162,6 @@ function decodePacket(pkt: Uint8Array): DecodeResult | null {
 
 // ── 帧累积状态（模块级变量，跨消息持久化）────────────────────────────────────
 // 官方推荐：用模块顶层 let 变量保存跨调用状态（而非 globalThis）
-let _accumPoints: Point3[] = [];
-let _frameTimestamp: { sec: number; nsec: number } | null = null;
-let _prevAzimuthTrans = -1;
 
 // ── 点列表 → foxglove.PointCloud 消息 ────────────────────────────────────────
 function buildPointCloud(
@@ -210,50 +197,17 @@ function buildPointCloud(
   };
 }
 
-// ── Foxglove User Script 入口 ─────────────────────────────────────────────────
-//
-// 帧切割逻辑（与 C++ SplitStrategyByAngle 一致）：
-//   azimuth_trans = (azimuth + 60) % 36000
-//   当 azimuth_trans < prevAzimuthTrans 时，表示过了 0° → 新帧开始
-//
-// 一帧约 600 个子包（360° / 0.6°），凑满一整圈后才发出，保证 5 Hz 完整帧。
-//
+// Preview emits decoded chunks at receiveTime, not reconstructed production scans.
+// This avoids silently dropping a second completed scan in one input message.
+// The bundled calibration table is a reference; use the device table for metric work.
 export default function script(
-  event: Input<"/lidar_packets">,
+  event: Input<"aorta/default/pub/lidar_packets">,
 ): Message<"foxglove.PointCloud"> | undefined {
-  const raw       = event.message.data as Uint8Array;
-  const dataBytes = parseCDR(raw);
-  if (!dataBytes || dataBytes.length === 0) return undefined;
-
-  const subPkts = extractSubPackets(dataBytes);
-  if (subPkts.length === 0) return undefined;
-
-  let completedFrame: Message<"foxglove.PointCloud"> | undefined;
-
-  for (const pkt of subPkts) {
-    const result = decodePacket(pkt);
-    if (!result) continue;
-
-    const { points, azimuth01 } = result;
-
-    if (_frameTimestamp === null) {
-      _frameTimestamp = event.receiveTime;
-    }
-
-    const azimuthTrans = (azimuth01 + 60) % 36000;
-    if (_prevAzimuthTrans >= 0 && azimuthTrans < _prevAzimuthTrans) {
-      // 帧切割：发出完整帧，重置累积
-      if (_accumPoints.length > 0 && _frameTimestamp !== null) {
-        completedFrame = buildPointCloud(_accumPoints, _frameTimestamp);
-      }
-      _accumPoints    = points.slice();
-      _frameTimestamp = event.receiveTime;
-    } else {
-      for (const p of points) _accumPoints.push(p);
-    }
-
-    _prevAzimuthTrans = azimuthTrans;
+  const dataBytes = Uint8Array.from(event.message.data as Uint8Array);
+  const points: Point3[] = [];
+  for (const packet of extractSubPackets(dataBytes)) {
+    const result = decodePacket(packet);
+    if (result) points.push(...result.points);
   }
-
-  return completedFrame;
+  return points.length ? buildPointCloud(points, event.receiveTime) : undefined;
 }

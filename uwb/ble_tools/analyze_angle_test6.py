@@ -2,6 +2,7 @@
 """
 分析测试6（不同姿态）的角度变化
 """
+import argparse
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
@@ -16,6 +17,8 @@ OUTPUT_DIR = Path(__file__).parent / "log_iphone_uwb" / "analysis_results"
 
 def load_data():
     df = pd.read_csv(LOG_FILE)
+    if df.empty:
+        raise ValueError('empty CSV')
     df['time_rel'] = df['elapsed_s'] - df['elapsed_s'].iloc[0]
     return df
 
@@ -49,9 +52,9 @@ def plot_angle_analysis(df, output_path):
     
     # 3. 角度变化率（角速度）
     ax3 = fig.add_subplot(gs[1, 1])
-    angle_diff = df['angle_deg'].diff()
+    angle_diff = (df['angle_deg'].diff() + 180) % 360 - 180
     time_diff = df['time_rel'].diff()
-    angular_velocity = angle_diff / time_diff  # 度/秒
+    angular_velocity = angle_diff / time_diff.where(time_diff > 0)  # 度/秒
     
     ax3.plot(df['time_rel'][1:], angular_velocity[1:], color='#e74c3c', alpha=0.6, linewidth=1)
     ax3.set_xlabel('时间 (秒)', fontsize=12)
@@ -84,7 +87,7 @@ def plot_angle_analysis(df, output_path):
     ax5.grid(True, alpha=0.3)
     ax5.fill_between(df['time_rel'], rolling_std, alpha=0.3, color='#9b59b6')
     
-    plt.suptitle('测试6 - 不同姿态角度分析', fontsize=16, fontweight='bold', y=0.995)
+    plt.suptitle('单组测距角度分析', fontsize=16, fontweight='bold', y=0.995)
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     print(f"✅ 保存: {output_path}")
     plt.close()
@@ -96,7 +99,7 @@ def analyze_angle_segments(df):
     print("="*80)
     
     # 计算角度变化率
-    angle_diff = df['angle_deg'].diff().abs()
+    angle_diff = ((df['angle_deg'].diff() + 180) % 360 - 180).abs()
     
     # 定义阶段：角度变化率阈值
     stable_threshold = 1.0  # 度/帧，低于此为稳定
@@ -137,8 +140,15 @@ def analyze_angle_segments(df):
     print("="*80 + "\n")
 
 def main():
+    global LOG_FILE, OUTPUT_DIR
+    parser = argparse.ArgumentParser(description='Analyze angle changes from one serial CSV')
+    parser.add_argument('file', type=Path)
+    parser.add_argument('--output-dir', type=Path, default=Path('output/uwb_angle'))
+    args = parser.parse_args()
+    LOG_FILE, OUTPUT_DIR = args.file, args.output_dir
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     print("="*80)
-    print("  测试6 - 不同姿态角度分析")
+    print("  单组测距角度分析")
     print("="*80)
     
     df = load_data()

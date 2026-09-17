@@ -8,6 +8,7 @@ Standalone 模式检查项：直接操作串口和 BLE，需先停止 uwb 服务
 """
 
 import time
+import math
 import statistics
 from typing import Optional, List
 
@@ -30,7 +31,7 @@ def _collect_until_tlv(comm: SerialComm, target_type: int,
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         pkt = comm.receive(timeout=0.5)
-        if pkt is None:
+        if pkt is None or not pkt.crc_ok:
             continue
         all_pkts.append(pkt)
         for tlv in pkt.tlvs:
@@ -67,7 +68,7 @@ def check_serial_and_version(comm: SerialComm, verbose: bool = False):
 
     # 等任意响应 → 串口通信 OK
     first = comm.receive(timeout=3.0)
-    if first is None:
+    if first is None or not first.crc_ok:
         fail = CheckStatus.FAIL
         return (
             CheckResult(name=s_name, status=fail, detail="重启命令无响应 (3s)"),
@@ -147,6 +148,8 @@ def check_heartbeat_and_errors(comm: SerialComm, duration: float = 5.0,
 
     packets = comm.receive_many(duration=duration)
     for pkt in packets:
+        if not pkt.crc_ok:
+            continue
         for tlv in pkt.tlvs:
             if tlv.type == TLV_HEARTBEAT:
                 hb = parse_heartbeat(tlv)
@@ -174,6 +177,8 @@ def check_heartbeat_and_errors(comm: SerialComm, duration: float = 5.0,
 
 
 def _make_error_result(name: str, error_codes: list) -> CheckResult:
+    if not error_codes:
+        return CheckResult(name=name, status=CheckStatus.WARN, detail='未收到有效错误状态，不能确认无错误')
     critical = [c for c in error_codes if c in CRITICAL_ERROR_CODES]
     if critical:
         codes_str = ", ".join(f"0x{c:02X}({ERROR_STATUS.get(c, '?')})" for c in critical)
@@ -210,35 +215,45 @@ def check_ranging(comm: SerialComm, tag_addr: int = 0x0000,
 
     # FIRA 配置
     comm.send(cmd_fira_config(tag_addr=tag_addr))
-    resp = comm.receive(timeout=3.0)
-    if resp:
-        for tlv in resp.tlvs:
-            p = parse_response_tlv(tlv)
-            if p and p[1] != 0x00:
-                return CheckResult(name=name, status=CheckStatus.FAIL,
-                                   detail=f"FIRA 配置被拒: {RESP_STATUS.get(p[1], f'0x{p[1]:02X}')}"), [], []
+    config_status = None
+    deadline = time.monotonic() + 3.0
+    while time.monotonic() < deadline and config_status is None:
+        response = comm.receive(timeout=.5)
+        if response is None or not response.crc_ok:
+            continue
+        for tlv in response.tlvs:
+            ack = parse_response_tlv(tlv)
+            if ack and ack[0] == 0x24:
+                config_status = ack[1]
+                break
+    if config_status is None:
+        return CheckResult(name=name, status=CheckStatus.FAIL,
+                           detail='FIRA configuration not acknowledged; ranging not started'), [], []
+    if config_status != 0:
+        return CheckResult(name=name, status=CheckStatus.FAIL,
+                           detail=f'FIRA configuration rejected: 0x{config_status:02X}'), [], []
 
-    # 开启测距
-    time.sleep(0.3)
-    comm.send(cmd_start_ranging())
-    time.sleep(1.0)
-
-    # 采集
-    packets = comm.receive_many(duration=duration)
-    for pkt in packets:
-        for tlv in pkt.tlvs:
-            if tlv.type == TLV_AOA_DATA:
-                f = parse_aoa_data(tlv, recv_time=time.monotonic())
-                if f:
-                    aoa_frames.append(f)
-            elif tlv.type == TLV_ERROR_STATUS:
-                c = parse_error_status(tlv)
-                if c is not None:
-                    error_codes.append(c)
-
-    # 停止
-    comm.send(cmd_stop_ranging())
-    comm.receive(timeout=1.0)
+    try:
+        time.sleep(.3)
+        comm.send(cmd_start_ranging())
+        time.sleep(1.)
+        packets = comm.receive_many(duration=duration)
+        for pkt in packets:
+            if not pkt.crc_ok:
+                continue
+            for tlv in pkt.tlvs:
+                if tlv.type == TLV_AOA_DATA:
+                    frame = parse_aoa_data(tlv, recv_time=time.monotonic())
+                    if frame:
+                        aoa_frames.append(frame)
+                elif tlv.type == TLV_ERROR_STATUS:
+                    code = parse_error_status(tlv)
+                    if code is not None:
+                        error_codes.append(code)
+    finally:
+        # A read exception or interruption must still attempt to stop our bench session.
+        comm.send(cmd_stop_ranging())
+        comm.receive(timeout=1.)
 
     if not aoa_frames:
         return CheckResult(name=name, status=CheckStatus.FAIL,
@@ -254,38 +269,39 @@ def check_ranging(comm: SerialComm, tag_addr: int = 0x0000,
 # 检查 7: 数据质量
 # ─────────────────────────────────────────────────────────────────────────────
 
-def check_data_quality(aoa_frames: List[AoaFrame], duration: float = 10.0) -> CheckResult:
-    name = "数据质量"
+def check_data_quality(aoa_frames: List[AoaFrame], duration: float = 10.0,
+                       min_frame_rate: Optional[float] = None) -> CheckResult:
+    """Report all samples; acceptance rate must come from the bench configuration."""
+    name = '数据质量'
+    if not math.isfinite(duration) or duration <= 0:
+        raise ValueError('duration must be finite and positive')
+    if min_frame_rate is not None and (not math.isfinite(min_frame_rate) or min_frame_rate <= 0):
+        raise ValueError('min_frame_rate must be finite and positive')
     if len(aoa_frames) < 5:
-        return CheckResult(name=name, status=CheckStatus.SKIP, detail="AoA 数据不足")
-
+        return CheckResult(name=name, status=CheckStatus.SKIP, detail='AoA 数据不足')
+    invalid = [index for index, frame in enumerate(aoa_frames)
+               if not all(math.isfinite(value) for value in (frame.distance, frame.angle, frame.pitch))
+               or frame.distance <= 0
+               or (frame.pos_confidence is not None and not math.isfinite(frame.pos_confidence))]
+    if invalid:
+        return CheckResult(name=name, status=CheckStatus.FAIL,
+                           detail=f'{len(invalid)}/{len(aoa_frames)} 帧字段无效', data={'invalid_indices': invalid})
+    distances = [frame.distance for frame in aoa_frames]
+    angles = [math.radians(frame.angle) for frame in aoa_frames]
+    confidences = [frame.pos_confidence for frame in aoa_frames if frame.pos_confidence is not None]
+    sine, cosine = sum(map(math.sin, angles)), sum(map(math.cos, angles))
     rate = len(aoa_frames) / duration
-    dists = [f.distance for f in aoa_frames if 0 < f.distance < 100]
-    angles = [f.angle for f in aoa_frames if abs(f.angle) < 180]
-    confs = [f.pos_confidence for f in aoa_frames if f.pos_confidence > 0]
-
-    avg_d = statistics.mean(dists) if dists else 0
-    avg_a = statistics.mean(angles) if angles else 0
-    avg_c = statistics.mean(confs) if confs else 0
-    std_d = statistics.stdev(dists) if len(dists) > 1 else 0
-
-    parts = [f"采集 {len(aoa_frames)} 帧", f"帧率 {rate:.1f}Hz",
-             f"距离均值 {avg_d:.2f}m", f"角度均值 {avg_a:.1f}°",
-             f"confidence 均值 {avg_c:.0f}", f"距离标准差 {std_d:.2f}m"]
-    warns = []
-    if rate < 12:
-        warns.append(f"帧率低 ({rate:.1f}<12)")
-    if avg_c < 50 and confs:
-        warns.append(f"置信度低 ({avg_c:.0f}<50)")
-    if std_d > 0.5 and dists:
-        warns.append(f"距离抖动大 ({std_d:.2f}m)")
-
-    data = {"frame_rate": round(rate, 1), "avg_distance": round(avg_d, 3),
-            "avg_angle": round(avg_a, 1), "avg_confidence": round(avg_c, 1),
-            "distance_std": round(std_d, 3), "total_frames": len(aoa_frames)}
-
-    st = CheckStatus.WARN if warns else CheckStatus.PASS
-    return CheckResult(name=name, status=st, detail="; ".join(parts), data=data)
+    data = dict(total_frames=len(aoa_frames), observed_frames_per_requested_second=rate,
+                avg_distance=statistics.mean(distances), distance_std=statistics.stdev(distances),
+                circular_mean_angle=math.degrees(math.atan2(sine, cosine)) if math.hypot(sine, cosine) > 1e-9 else None,
+                avg_confidence=statistics.mean(confidences) if confidences else None,
+                missing_confidence_frames=len(aoa_frames)-len(confidences), min_frame_rate=min_frame_rate)
+    status = CheckStatus.WARN if min_frame_rate is None or len(confidences) != len(aoa_frames) else CheckStatus.PASS
+    if min_frame_rate is not None and rate < min_frame_rate:
+        status = CheckStatus.FAIL
+    return CheckResult(name=name, status=status,
+                       detail=f'{len(aoa_frames)} 帧字段有效；窗口计数 {rate:.2f}/s；未验证定位精度；最低帧率要求={min_frame_rate}',
+                       data=data)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -296,6 +312,11 @@ def check_crc_integrity(comm: SerialComm) -> CheckResult:
     name = "CRC 校验完整性"
     total = comm.total_packets_received
     errors = comm.crc_errors
+    malformed = getattr(comm, 'protocol_errors', 0)
+    if malformed:
+        return CheckResult(name=name, status=CheckStatus.FAIL,
+                           detail=f'{malformed}/{total} TLV frames malformed',
+                           data={'total': total, 'errors': errors, 'malformed': malformed})
     if total == 0:
         return CheckResult(name=name, status=CheckStatus.SKIP, detail="无数据包")
     if errors > 0:
@@ -318,21 +339,10 @@ def check_ranging_recovery(comm: SerialComm, tag_addr: int = 0x0000,
     time.sleep(0.5)
     comm.drain()
 
-    comm.send(cmd_fira_config(tag_addr=tag_addr))
-    time.sleep(0.3)
-    comm.send(cmd_start_ranging())
-    time.sleep(1.0)
-
-    cnt = 0
-    for pkt in comm.receive_many(duration=5.0):
-        for tlv in pkt.tlvs:
-            if tlv.type == TLV_AOA_DATA:
-                cnt += 1
-
-    comm.send(cmd_stop_ranging())
-    comm.receive(timeout=1.0)
-
-    if cnt < 3:
-        return CheckResult(name=name, status=CheckStatus.FAIL, detail=f"二次启动仅 {cnt} 帧")
+    result, frames, _ = check_ranging(comm, tag_addr=tag_addr, duration=5., verbose=verbose)
+    if result.status != CheckStatus.PASS:
+        return CheckResult(name=name, status=result.status, detail=result.detail, data=result.data)
+    if len(frames) < 3:
+        return CheckResult(name=name, status=CheckStatus.FAIL, detail=f'二次启动仅 {len(frames)} 帧')
     return CheckResult(name=name, status=CheckStatus.PASS,
-                       detail=f"二次启动正常, {cnt} 帧", data={"frame_count": cnt})
+                       detail=f'二次启动正常, {len(frames)} 帧', data={'frame_count': len(frames)})

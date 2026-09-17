@@ -255,37 +255,17 @@ def parse_anchor_version(tlv: TLV) -> Optional[AnchorVersion]:
 
 
 def parse_aoa_data(tlv: TLV, recv_time: float = 0.0) -> Optional[AoaFrame]:
-    """解析 0xC5 AoA TLV。"""
+    from sensor_tools.uwb_serial import ranging
     if tlv.type != TLV_AOA_DATA:
         return None
-    data = tlv.value
-    if len(data) < 26:
+    try:
+        data = ranging(tlv.value)
+    except ValueError:
         return None
-
     frame = AoaFrame(timestamp=recv_time)
-    frame.sync_cnt = struct.unpack_from("<I", data, 0)[0]
-    # skip mac_id(4), fob_id(4), fob_type(2) = 10 bytes
-    offset = 14
-    frame.distance = struct.unpack_from("<f", data, offset)[0]; offset += 4
-    frame.angle = struct.unpack_from("<f", data, offset)[0]; offset += 4
-    frame.pitch = struct.unpack_from("<f", data, offset)[0]; offset += 4
-
-    if offset < len(data):
-        rssi_len = data[offset]; offset += 1
-        if offset + rssi_len <= len(data):
-            frame.rssi = [struct.unpack_from("<b", data, offset + i)[0] for i in range(rssi_len)]
-            offset += rssi_len
-
-    # rssi_rxp, rssi_fpp, rssi_np, rssi_ble (optional)
-    for attr in ['rssi_rxp', 'rssi_fpp', 'rssi_np', 'rssi_ble']:
-        if offset < len(data):
-            setattr(frame, attr, struct.unpack_from("<b", data, offset)[0])
-            offset += 1
-
-    # pos_confidence
-    if offset < len(data):
-        frame.pos_confidence = data[offset]
-
+    for name in ['sync_cnt', 'distance', 'angle', 'pitch', 'rssi_rxp', 'rssi_fpp', 'rssi_np', 'rssi_ble', 'pos_confidence']:
+        setattr(frame, name, data[name])
+    frame.rssi = list(data['rssi_values'])
     return frame
 
 

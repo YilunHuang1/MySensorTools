@@ -1,38 +1,16 @@
-# Infrared Code Map
+# infrared-debug source map
 
-## Current Verified Paths
+Baseline: remote master `291b58055b54a924735604f26b840ab1f22b5427` (2026-09-17).
+Paths below are relative to vita-robot. Read them at that revision with `git show`;
+recheck remote master and deployed revision before a new investigation.
 
-- `src/middleware/sensor/infrared/config/node_config.json`
-  - Node name: `infrared_camera`.
-  - Task: `infrared_camera_task`, class `InfraredCameraTask`, period `100ms`.
-  - Publishes:
-    - `/infrared_camera/image_raw` as `sensor_msgs/Image`.
-    - `/infrared_camera/video_h265` as `foxglove_msgs/CompressedVideo`.
-- `src/middleware/sensor/infrared/config/nodes/infrared_camera.json`
-  - Checked config:
-    - Sensor `sc202cs`.
-    - Resolution `1536x1160`.
-    - FPS `15`.
-    - `codec_config.enable_h265: false`.
-  - Current checked file contains merge conflict markers around `ir_light_config`; treat it as dirty until resolved.
-- `src/middleware/sensor/infrared/infrared_camera_task.cpp`
-  - Reads camera, save, performance, codec, and locally edited IR-light configs.
-  - Initializes `InfraredCameraPipeline`.
-  - Reports `PERCEPTION_INFRARED_CAMERA_MAIN_CONNECTION_LOST` if pipeline init fails.
-  - Uses optional H265 encoder only when enabled.
-  - Current checked file contains merge conflict markers around IR-light logic.
-- `src/middleware/sensor/infrared/infrared_camera_pipeline.*`
-  - ISP/YNR/PYM pipeline implementation.
-- `src/middleware/sensor/infrared/lib`
-  - Contains SC202CS ISP libraries, including `lib_sc202cs_linear.so` and `libsc202cs.so*`.
-- `src/middleware/sensor/infrared/legacy`
-  - Older infrared implementation. Check only if the deployed service/package uses the legacy target.
+- `src/middleware/sensor/infrared/infrared_aorta.cpp` — Aorta publication and control integration.
+- `src/middleware/sensor/infrared/infrared_aorta_codec.cpp` — Raw-image and video encoding contract; verify encoding, dimensions, stride and timestamp.
+- `src/middleware/sensor/infrared/infrared_camera_task.cpp` — Pipeline operation and enable conditions.
+- `src/middleware/sensor/infrared/infrared_camera_pipeline.cpp` — Sensor capture and image processing.
+- `src/middleware/sensor/infrared/config/nodes/infrared_camera.json` — Source defaults, not deployed configuration proof.
+- `src/application/vita_slam/vs_calib/infrared_verify.cpp` — Production detector/pose behavior; the standalone bench only reports tag-in-camera pose.
 
-## Common Evidence To Collect
-
-- Whether the deployed robot has the same config as the checked tree.
-- `ros2 topic hz /infrared_camera/image_raw`.
-- Message dimensions, encoding, and data size from `/infrared_camera/image_raw`.
-- H265 enabled state and `/infrared_camera/video_h265` rate if enabled.
-- Logs containing `infrared`, `sc202cs`, `SC202CS`, `ISP`, `H265`, `pipeline`, `lux`, `AE`, `PERCEPTION_INFRARED`.
-- For IR fill light behavior, include robot body mode/context because suppression modes may intentionally disable the light.
+Record exact channel/schema, source/publish/log timestamps, counts and configuration.
+Topic registration, static code and an old sample do not establish current device health.
+See [Aorta contract](../../AORTA.md).

@@ -3,6 +3,7 @@
 UWB 测距数据分析脚本
 分析不同手机姿态下的测距性能（距离、帧率、角度）
 """
+import argparse
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
@@ -27,11 +28,13 @@ def load_data(log_file):
     """加载单个日志文件"""
     df = pd.read_csv(LOG_DIR / log_file)
     # 计算相对时间（从0开始）
+    if df.empty:
+        raise ValueError('empty CSV')
     df['time_rel'] = df['elapsed_s'] - df['elapsed_s'].iloc[0]
     return df
 
 
-def calculate_fps_rolling(df, window='1S'):
+def calculate_fps_rolling(df, window='1s'):
     """计算滚动窗口FPS"""
     df_copy = df.copy()
     df_copy['timestamp_dt'] = pd.to_datetime(df_copy['timestamp'], unit='s')
@@ -77,7 +80,7 @@ def plot_fps_comparison(datasets, output_path):
         labels.append(data['label'])
         colors.append(data['color'])
     
-    bp = ax1.boxplot(fps_data, labels=labels, patch_artist=True, 
+    bp = ax1.boxplot(fps_data, tick_labels=labels, patch_artist=True,
                      showmeans=True, meanline=True)
     for patch, color in zip(bp['boxes'], colors):
         patch.set_facecolor(color)
@@ -234,6 +237,16 @@ def generate_summary_stats(datasets, output_path):
 
 
 def main():
+    global LOG_DIR, LOGS, OUTPUT_DIR
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('files', nargs='+', type=Path)
+    parser.add_argument('--output-dir', type=Path, default=Path('output/uwb_logs'))
+    args = parser.parse_args()
+    LOG_DIR = Path('.')
+    OUTPUT_DIR = args.output_dir
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    LOGS = [dict(file=path.resolve(), label=path.stem, color=f'C{index % 10}') for index, path in enumerate(args.files)]
+    failed = 0
     print("=" * 80)
     print("  UWB 测距数据分析")
     print("=" * 80)
@@ -250,16 +263,18 @@ def main():
             })
             print(f"✅ 加载: {log['file']} ({len(df)} 帧)")
         except Exception as e:
+            failed += 1
             print(f"❌ 加载失败 {log['file']}: {e}")
     
     if not datasets:
-        print("❌ 没有成功加载任何数据")
-        return
+        raise ValueError("没有成功加载任何数据")
     
+    if not datasets:
+        raise ValueError("没有成功加载任何数据")
     print(f"\n共加载 {len(datasets)} 个数据集\n")
     
     # 输出目录
-    output_dir = LOG_DIR / "analysis_results"
+    output_dir = OUTPUT_DIR
     output_dir.mkdir(exist_ok=True)
     
     # 生成图表
@@ -278,5 +293,7 @@ def main():
     print("=" * 80)
 
 
+    return 1 if failed else 0
+
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

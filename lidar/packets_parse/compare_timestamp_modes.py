@@ -1,138 +1,75 @@
 #!/usr/bin/env python3
+"""Compare timestamp CSVs by nearest frame end within a bounded alignment window.
+
+Alignment is inferred, not a packet-identity proof. Review unmatched frames and
+use the same source recording, range, calibration and invalid-point policy.
 """
-对比两种时间戳模式的 CSV 输出，分析差异。
-
-用法:
-  1. 先以 driver_original 模式运行:
-       TIMESTAMP_MODE = "driver_original"  # in extract_lidar_pcd_with_ts.py
-       python extract_lidar_pcd_with_ts.py
-
-  2. 再以 per_packet 模式运行:
-       TIMESTAMP_MODE = "per_packet"
-       python extract_lidar_pcd_with_ts.py
-
-  3. 运行本脚本对比:
-       python compare_timestamp_modes.py
-"""
-
-import os
-import sys
-import numpy as np
+import argparse
 import csv
+import json
 from pathlib import Path
-
-BASE_DIR = 'pcd_output_with_ts'
-CSV_DRIVER = os.path.join(BASE_DIR, 'driver_original', 'frame_timestamps_driver_original.csv')
-CSV_PERPKT = os.path.join(BASE_DIR, 'per_packet',       'frame_timestamps_per_packet.csv')
+import statistics
 
 
 def load_csv(path):
-    frames = []
-    with open(path, 'r') as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            frames.append({
-                'frame_idx':      int(row['frame_idx']),
-                'first_point_ts': float(row['first_point_ts']),
-                'last_point_ts':  float(row['last_point_ts']),
-                'duration_ms':    float(row['duration_ms']),
-                'point_count':    int(row['point_count']),
-            })
-    return frames
+    with open(path) as stream:
+        rows = [dict(frame_idx=int(r['frame_idx']), first=float(r['first_point_ts']),
+                     last=float(r['last_point_ts']), points=int(r['point_count']),
+                     partial=bool(int(r.get('partial', '0')))) for r in csv.DictReader(stream)]
+    if not rows:
+        raise ValueError(f'empty timestamp CSV: {path}')
+    return rows
+
+
+def describe(rows):
+    gaps = [b['first'] - a['last'] for a,b in zip(rows,rows[1:])]
+    return dict(frames=len(rows), partial_frames=sum(r['partial'] for r in rows),
+                regressions=sum(gap < 0 for gap in gaps),
+                reversed_frame_endpoints=sum(r['last'] < r['first'] for r in rows),
+                min_boundary_gap_us=min(gaps)*1e6 if gaps else None,
+                max_boundary_gap_us=max(gaps)*1e6 if gaps else None,
+                mean_duration_ms=statistics.mean((r['last']-r['first'])*1000 for r in rows))
+
+
+def compare(reference, candidate, tolerance_ms):
+    remaining = set(range(len(candidate)))
+    matched = []
+    for row in reference:
+        possible = [i for i in remaining if not row['partial'] and not candidate[i]['partial']
+                    and row['points'] == candidate[i]['points']
+                    and abs(row['last']-candidate[i]['last'])*1000 <= tolerance_ms]
+        if len(possible) != 1:
+            continue  # Ambiguous or absent match must not become a confident comparison.
+        index = possible[0]; remaining.remove(index)
+        other = candidate[index]
+        matched.append(dict(reference_frame=row['frame_idx'], candidate_frame=other['frame_idx'],
+                            first_delta_ms=(other['first']-row['first'])*1000,
+                            last_delta_ms=(other['last']-row['last'])*1000))
+    return dict(reference=describe(reference), candidate=describe(candidate), matched=matched,
+                unmatched_reference=len(reference)-len(matched), unmatched_candidate=len(remaining),
+                alignment='inferred from end timestamp and equal point count; not packet identity')
 
 
 def main():
-    for p, name in [(CSV_DRIVER, 'driver_original'), (CSV_PERPKT, 'per_packet')]:
-        if not Path(p).exists():
-            print(f"❌ 找不到 {name} CSV: {p}")
-            print("   请先以对应模式运行 extract_lidar_pcd_with_ts.py")
-            sys.exit(1)
-
-    a = load_csv(CSV_DRIVER)
-    b = load_csv(CSV_PERPKT)
-
-    n = min(len(a), len(b))
-    print(f"对比帧数: {n}")
-    print()
-
-    # ---- 每帧 first_point_ts 差异 ----
-    diffs_ms = [(b[i]['first_point_ts'] - a[i]['first_point_ts']) * 1000 for i in range(n)]
-
-    print("=" * 70)
-    print("first_point_ts 差异（per_packet - driver_original，单位 ms）")
-    print("=" * 70)
-    print(f"  均值:   {np.mean(diffs_ms):+.3f} ms")
-    print(f"  标准差: {np.std(diffs_ms):.3f} ms")
-    print(f"  最小:   {np.min(diffs_ms):+.3f} ms")
-    print(f"  最大:   {np.max(diffs_ms):+.3f} ms")
-
-    # 差异大于 5ms 的帧
-    anomaly_thresh = 5.0
-    anomalies = [(i, diffs_ms[i]) for i in range(n) if abs(diffs_ms[i]) > anomaly_thresh]
-    if anomalies:
-        print(f"\n⚠️  差异 > {anomaly_thresh}ms 的帧（共 {len(anomalies)} 帧）:")
-        print(f"  {'帧':>5} {'driver_first':>18} {'perpkt_first':>18} {'差异(ms)':>10}")
-        for i, diff in anomalies[:20]:
-            print(f"  {a[i]['frame_idx']:>5} {a[i]['first_point_ts']:>18.6f} "
-                  f"{b[i]['first_point_ts']:>18.6f} {diff:>+10.3f}")
-    else:
-        print(f"\n✅ 所有帧差异均 < {anomaly_thresh}ms，两种模式时间戳基本一致。")
-
-    # ---- 帧间隔分析 ----
-    print()
-    print("=" * 70)
-    print("帧起始时间间隔分析（相邻帧 first_point_ts 之差）")
-    print("=" * 70)
-    for label, frames in [("driver_original", a), ("per_packet", b)]:
-        intervals = [(frames[i+1]['first_point_ts'] - frames[i]['first_point_ts']) * 1000
-                     for i in range(len(frames)-1)]
-        arr = np.array(intervals)
-        print(f"\n  [{label}]")
-        print(f"    均值:   {np.mean(arr):.2f} ms  (理想应接近 200ms)")
-        print(f"    标准差: {np.std(arr):.2f} ms")
-        print(f"    最小:   {np.min(arr):.2f} ms")
-        print(f"    最大:   {np.max(arr):.2f} ms")
-        bad = [(i, v) for i, v in enumerate(intervals) if abs(v - 200.0) > 10]
-        if bad:
-            print(f"    ⚠️ 偏离200ms超10ms的帧间隔: {len(bad)} 处")
-            for i, v in bad[:5]:
-                print(f"       帧{frames[i]['frame_idx']}→{frames[i+1]['frame_idx']}: {v:.2f} ms")
-
-    # ---- 帧时长分析 ----
-    print()
-    print("=" * 70)
-    print("帧时长分析（last_point_ts - first_point_ts）")
-    print("=" * 70)
-    for label, frames in [("driver_original", a), ("per_packet", b)]:
-        durations = [f['duration_ms'] for f in frames]
-        arr = np.array(durations)
-        print(f"\n  [{label}]")
-        print(f"    均值:   {np.mean(arr):.2f} ms")
-        print(f"    标准差: {np.std(arr):.2f} ms")
-        print(f"    最小:   {np.min(arr):.2f} ms")
-        print(f"    最大:   {np.max(arr):.2f} ms")
-
-    print()
-    print("=" * 70)
-    print("结论说明")
-    print("=" * 70)
-    print("""
-  driver_original 模式:
-    - first_point_ts = 帧末包时间 - 固定 200ms
-    - 假设电机匀速，帧时长恒为 200ms
-    - 电机震动 → 实际帧周期波动 → 相邻帧 first_point_ts 可能重叠
-
-  per_packet 模式:
-    - 每个点时间戳 = 该包的硬件时间戳 + chan × 20.8μs
-    - 不依赖 200ms 假设
-    - 帧起始时间 = 帧内最早点的时间戳（真实反映实际转速）
-    - 相邻帧起始时间差 = 实际帧周期，不会重叠
-
-  如果两种模式的帧起始时间差异 > 5ms，说明存在时间戳偏差风险。
-  如果 driver_original 的帧间隔出现 < 190ms 或 > 210ms，
-  则 vita_slam 可能会 Drop LiDAR frame。
-""")
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('reference',type=Path)
+    parser.add_argument('candidates',nargs='+',type=Path)
+    parser.add_argument('--max-alignment-ms',type=float,default=50)
+    parser.add_argument('--output',type=Path)
+    args=parser.parse_args()
+    if args.max_alignment_ms <= 0: parser.error('alignment tolerance must be positive')
+    try:
+        reference=load_csv(args.reference)
+        report={str(path):compare(reference,load_csv(path),args.max_alignment_ms) for path in args.candidates}
+        rendered=json.dumps(report,indent=2,allow_nan=False)
+        print(rendered)
+        if args.output:
+            args.output.parent.mkdir(parents=True,exist_ok=True)
+            args.output.write_text(rendered+'\n')
+    except (OSError,ValueError,KeyError) as error:
+        parser.exit(1,f'error: {error}\n')
+    return 0
 
 
-if __name__ == '__main__':
-    main()
+if __name__=='__main__':
+    raise SystemExit(main())

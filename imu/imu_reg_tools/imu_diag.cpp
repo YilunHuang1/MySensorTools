@@ -16,6 +16,9 @@
  *   ./imu_diag                    # 默认 spidev0.0，运行诊断 + 实时监控
  *   ./imu_diag /dev/spidev2.0     # 指定 SPI 设备 (X5 平台)
  *   ./imu_diag /dev/spidev2.0 bsample   # 指定坐标系类型
+ *   ./imu_diag /dev/spidev0.0 range accel 8
+ *   ./imu_diag /dev/spidev0.0 range gyro 1000
+ *   ./imu_diag /dev/spidev0.0 restore
  */
 
 #include <errno.h>
@@ -31,7 +34,6 @@
 
 #include <cmath>
 #include <string>
-#include <sstream>
 
 // ============================================================
 // SPI 配置
@@ -68,9 +70,6 @@ static const uint32_t kSpiSpeed = 1000000;  // 1 MHz
 #define REG_OUTZ_L_XL  0x2C
 #define REG_OUTZ_H_XL  0x2D
 
-// 换算系数（与 imu.cpp 保持一致）
-static constexpr float kAccelScale = 0.122f;  // mg/LSB, ±4g
-static constexpr float kGyroScale  = 8.75f;   // mdps/LSB, ±250dps
 static constexpr float kTempScale  = 256.0f;
 static constexpr float kTempOffset = 25.0f;
 
@@ -127,7 +126,7 @@ static uint8_t reg_read(uint8_t reg) {
     return rx[1];
 }
 
-static void reg_write(uint8_t reg, uint8_t val) {
+static bool reg_write(uint8_t reg, uint8_t val) {
     uint8_t tx[2] = {(uint8_t)(reg & 0x7F), val};
     uint8_t rx[2] = {0};
     struct spi_ioc_transfer tr;
@@ -137,7 +136,183 @@ static void reg_write(uint8_t reg, uint8_t val) {
     tr.len           = 2;
     tr.speed_hz      = kSpiSpeed;
     tr.bits_per_word = kSpiBits;
-    ioctl(spi_fd, SPI_IOC_MESSAGE(1), &tr);
+    if (ioctl(spi_fd, SPI_IOC_MESSAGE(1), &tr) < 0) {
+        fprintf(stderr, COLOR_RED "SPI write error for reg 0x%02X: %s\n" COLOR_RESET,
+                reg, strerror(errno));
+        return false;
+    }
+    return true;
+}
+
+static bool reg_write_verify(uint8_t reg, uint8_t val, uint8_t mask = 0xFF) {
+    if (!reg_write(reg, val)) return false;
+    uint8_t readback = reg_read(reg);
+    if (((readback ^ val) & mask) != 0) {
+        fprintf(stderr, COLOR_RED
+                "Write verify failed: reg 0x%02X, wrote 0x%02X, read 0x%02X\n"
+                COLOR_RESET, reg, val, readback);
+        return false;
+    }
+    return true;
+}
+
+// ============================================================
+// 量程解码与换算系数
+// ============================================================
+static int accel_range_from_ctrl(uint8_t ctrl) {
+    switch ((ctrl >> 2) & 0x03) {
+        case 0: return 2;
+        case 1: return 16;
+        case 2: return 4;
+        case 3: return 8;
+    }
+    return 0;
+}
+
+static float accel_scale_from_ctrl(uint8_t ctrl) {
+    switch (accel_range_from_ctrl(ctrl)) {
+        case 2:  return 0.061f;
+        case 4:  return 0.122f;
+        case 8:  return 0.244f;
+        case 16: return 0.488f;
+    }
+    return 0.0f;
+}
+
+static int gyro_range_from_ctrl(uint8_t ctrl) {
+    if (ctrl & 0x01) return 4000;
+    if (ctrl & 0x02) return 125;
+    switch ((ctrl >> 2) & 0x03) {
+        case 0: return 250;
+        case 1: return 500;
+        case 2: return 1000;
+        case 3: return 2000;
+    }
+    return 0;
+}
+
+static float gyro_scale_from_ctrl(uint8_t ctrl) {
+    switch (gyro_range_from_ctrl(ctrl)) {
+        case 125:  return 4.37f;
+        case 250:  return 8.75f;
+        case 500:  return 17.5f;
+        case 1000: return 35.0f;
+        case 2000: return 70.0f;
+        case 4000: return 140.0f;
+    }
+    return 0.0f;
+}
+
+static bool parse_int(const char* text, int& value) {
+    errno = 0;
+    char* end = nullptr;
+    long parsed = strtol(text, &end, 0);
+    if (errno != 0 || end == text || *end != '\0' ||
+        parsed < 0 || parsed > 1000000) {
+        return false;
+    }
+    value = static_cast<int>(parsed);
+    return true;
+}
+
+static void print_range_config() {
+    uint8_t ctrl1 = reg_read(REG_CTRL1_XL);
+    uint8_t ctrl2 = reg_read(REG_CTRL2_G);
+    printf("  Accelerometer: ±%dg, CTRL1_XL=0x%02X, %.3f mg/LSB\n",
+           accel_range_from_ctrl(ctrl1), ctrl1, accel_scale_from_ctrl(ctrl1));
+    printf("  Gyroscope:     ±%d dps, CTRL2_G=0x%02X, %.2f mdps/LSB\n",
+           gyro_range_from_ctrl(ctrl2), ctrl2, gyro_scale_from_ctrl(ctrl2));
+}
+
+static bool set_accel_range(int range_g) {
+    uint8_t fs_bits = 0;
+    switch (range_g) {
+        case 2:  fs_bits = 0x00; break;
+        case 4:  fs_bits = 0x08; break;
+        case 8:  fs_bits = 0x0C; break;
+        case 16: fs_bits = 0x04; break;
+        default:
+            fprintf(stderr, "Invalid accel range: %d (allowed: 2, 4, 8, 16)\n",
+                    range_g);
+            return false;
+    }
+
+    uint8_t old_value = reg_read(REG_CTRL1_XL);
+    uint8_t odr = (old_value >> 4) & 0x0F;
+    if (odr > 0x0A || (old_value & 0x01) != 0) {
+        fprintf(stderr, COLOR_RED
+                "CTRL1_XL readback is invalid (0x%02X); refusing to write\n"
+                COLOR_RESET, old_value);
+        return false;
+    }
+    uint8_t new_value = (uint8_t)((old_value & ~0x0C) | fs_bits);
+    printf("  CTRL1_XL: 0x%02X -> 0x%02X  (±%dg)\n",
+           old_value, new_value, range_g);
+    if (!reg_write_verify(REG_CTRL1_XL, new_value)) return false;
+    printf(COLOR_GREEN "  Range updated and verified.\n" COLOR_RESET);
+    return true;
+}
+
+static bool set_gyro_range(int range_dps) {
+    uint8_t fs_bits = 0;
+    switch (range_dps) {
+        case 125:  fs_bits = 0x02; break;
+        case 250:  fs_bits = 0x00; break;
+        case 500:  fs_bits = 0x04; break;
+        case 1000: fs_bits = 0x08; break;
+        case 2000: fs_bits = 0x0C; break;
+        case 4000: fs_bits = 0x01; break;
+        default:
+            fprintf(stderr,
+                    "Invalid gyro range: %d (allowed: 125, 250, 500, 1000, 2000, 4000)\n",
+                    range_dps);
+            return false;
+    }
+
+    uint8_t old_value = reg_read(REG_CTRL2_G);
+    uint8_t odr = (old_value >> 4) & 0x0F;
+    if (odr > 0x0A) {
+        fprintf(stderr, COLOR_RED
+                "CTRL2_G readback is invalid (0x%02X); refusing to write\n"
+                COLOR_RESET, old_value);
+        return false;
+    }
+    // 低 4 位全部规范化，避免 FS_G、FS_125、FS_4000 产生冲突组合。
+    uint8_t new_value = (uint8_t)((old_value & 0xF0) | fs_bits);
+    printf("  CTRL2_G: 0x%02X -> 0x%02X  (±%d dps)\n",
+           old_value, new_value, range_dps);
+    if (!reg_write_verify(REG_CTRL2_G, new_value)) return false;
+    printf(COLOR_GREEN "  Range updated and verified.\n" COLOR_RESET);
+    return true;
+}
+
+static bool restore_default_config() {
+    printf("  Restoring robot production defaults: 104Hz, ±4g, ±250dps...\n");
+
+    if (!reg_write(REG_CTRL3_C, 0x01)) return false;
+    bool reset_done = false;
+    for (int i = 0; i < 100; ++i) {
+        usleep(1000);
+        if ((reg_read(REG_CTRL3_C) & 0x01) == 0) {
+            reset_done = true;
+            break;
+        }
+    }
+    if (!reset_done) {
+        fprintf(stderr, COLOR_RED "Software reset did not complete\n" COLOR_RESET);
+        return false;
+    }
+
+    usleep(100000);
+    if (!reg_write_verify(REG_CTRL1_XL, 0x48) ||
+        !reg_write_verify(REG_CTRL2_G, 0x40) ||
+        !reg_write_verify(REG_CTRL3_C, 0x44)) {
+        return false;
+    }
+    usleep(100000);
+    printf(COLOR_GREEN "  Default configuration restored and verified.\n" COLOR_RESET);
+    print_range_config();
+    return true;
 }
 
 // ============================================================
@@ -217,27 +392,33 @@ static bool check_who_am_i() {
 static void check_ctrl_regs() {
     printf(COLOR_BOLD "\n[Layer 2] CTRL 寄存器配置\n" COLOR_RESET);
 
-    struct {
-        uint8_t     addr;
-        const char* name;
-        uint8_t     expected;
-        const char* note;
-    } regs[] = {
-        {REG_CTRL1_XL, "CTRL1_XL (0x10)", 0x48, "104Hz, ±4g"},
-        {REG_CTRL2_G,  "CTRL2_G  (0x11)", 0x40, "104Hz, ±250dps"},
-        {REG_CTRL3_C,  "CTRL3_C  (0x12)", 0x44, "BDU=1, IF_INC=1"},
-    };
+    uint8_t ctrl1 = reg_read(REG_CTRL1_XL);
+    uint8_t ctrl2 = reg_read(REG_CTRL2_G);
+    uint8_t ctrl3 = reg_read(REG_CTRL3_C);
+    char detail[160];
 
-    for (auto& r : regs) {
-        uint8_t v = reg_read(r.addr);
-        char detail[128];
-        bool ok = (v == r.expected);
-        snprintf(detail, sizeof(detail), "读回 0x%02X (期望 0x%02X)  %s",
-                 v, r.expected, r.note);
-        print_check(r.name, ok, detail);
-        if (!ok && v == 0x00)
-            printf(COLOR_YELLOW "    提示: 寄存器为 0x00，Init() 未执行 或 复位后没有写入\n" COLOR_RESET);
-    }
+    uint8_t accel_odr = (ctrl1 >> 4) & 0x0F;
+    bool accel_ok = accel_odr > 0 && accel_odr <= 0x0A &&
+                    (ctrl1 & 0x01) == 0;
+    snprintf(detail, sizeof(detail), "0x%02X  ODR code=0x%X, ±%dg, %.3f mg/LSB",
+             ctrl1, (ctrl1 >> 4) & 0x0F, accel_range_from_ctrl(ctrl1),
+             accel_scale_from_ctrl(ctrl1));
+    print_check("CTRL1_XL (0x10)", accel_ok, detail);
+
+    uint8_t gyro_odr = (ctrl2 >> 4) & 0x0F;
+    bool gyro_ok = gyro_odr > 0 && gyro_odr <= 0x0A &&
+                   !((ctrl2 & 0x01) && (ctrl2 & 0x0E));
+    snprintf(detail, sizeof(detail), "0x%02X  ODR code=0x%X, ±%d dps, %.2f mdps/LSB",
+             ctrl2, (ctrl2 >> 4) & 0x0F, gyro_range_from_ctrl(ctrl2),
+             gyro_scale_from_ctrl(ctrl2));
+    print_check("CTRL2_G  (0x11)", gyro_ok, detail);
+
+    snprintf(detail, sizeof(detail), "0x%02X  BDU=%d, IF_INC=%d",
+             ctrl3, (ctrl3 >> 6) & 1, (ctrl3 >> 2) & 1);
+    print_check("CTRL3_C  (0x12)", (ctrl3 & 0x44) == 0x44, detail);
+
+    if (ctrl1 == 0x00 || ctrl2 == 0x00)
+        printf(COLOR_YELLOW "    提示: ODR 为 Power-down，请执行 restore 恢复默认配置\n" COLOR_RESET);
 
     // 打印其余 CTRL 供参考
     printf("  ---- 其余 CTRL (仅供参考) ----\n");
@@ -281,7 +462,6 @@ static void check_one_sample(const std::string& sample_type) {
 
     int16_t rx_g, ry_g, rz_g;
     int16_t rx_a, ry_a, rz_a;
-    int16_t rt_l, rt_h;
 
     read_raw_xyz(REG_OUTX_L_G,  rx_g, ry_g, rz_g);
     read_raw_xyz(REG_OUTX_L_XL, rx_a, ry_a, rz_a);
@@ -318,12 +498,16 @@ static void check_one_sample(const std::string& sample_type) {
         printf(COLOR_GREEN "    ✓  寄存器原始值非零，硬件读取正常\n" COLOR_RESET);
 
     // Layer 5: 换算成物理量
-    float gx = rx_g * kGyroScale / 1000.0f;
-    float gy = ry_g * kGyroScale / 1000.0f;
-    float gz = rz_g * kGyroScale / 1000.0f;
-    float ax = rx_a * kAccelScale / 1000.0f;
-    float ay = ry_a * kAccelScale / 1000.0f;
-    float az = rz_a * kAccelScale / 1000.0f;
+    uint8_t ctrl1 = reg_read(REG_CTRL1_XL);
+    uint8_t ctrl2 = reg_read(REG_CTRL2_G);
+    float accel_scale = accel_scale_from_ctrl(ctrl1);
+    float gyro_scale = gyro_scale_from_ctrl(ctrl2);
+    float gx = rx_g * gyro_scale / 1000.0f;
+    float gy = ry_g * gyro_scale / 1000.0f;
+    float gz = rz_g * gyro_scale / 1000.0f;
+    float ax = rx_a * accel_scale / 1000.0f;
+    float ay = ry_a * accel_scale / 1000.0f;
+    float az = rz_a * accel_scale / 1000.0f;
     float temp_c = raw_temp / kTempScale + kTempOffset;
 
     printf("\n  [Layer 5] 换算后 (物理量, 坐标变换前)\n");
@@ -357,10 +541,15 @@ static void check_one_sample(const std::string& sample_type) {
 // 实时监控模式
 // ============================================================
 static void monitor_loop(const std::string& sample_type, int hz) {
+    uint8_t ctrl1 = reg_read(REG_CTRL1_XL);
+    uint8_t ctrl2 = reg_read(REG_CTRL2_G);
+    float accel_scale = accel_scale_from_ctrl(ctrl1);
+    float gyro_scale = gyro_scale_from_ctrl(ctrl2);
     printf(COLOR_BOLD
            "\n[Monitor] 实时监控 %dHz，Ctrl+C 退出\n"
+           "  当前量程: Accel ±%dg, Gyro ±%d dps\n"
            "  格式: Gyro(deg/s) X Y Z | Accel(g) X Y Z | Temp(°C) | STATUS\n"
-           COLOR_RESET, hz);
+           COLOR_RESET, hz, accel_range_from_ctrl(ctrl1), gyro_range_from_ctrl(ctrl2));
     printf("%-10s  %8s %8s %8s  |  %8s %8s %8s  |  %6s  | %s\n",
            "sample#", "Gx", "Gy", "Gz", "Ax", "Ay", "Az", "Temp", "STATUS");
     printf("%s\n", std::string(88, '-').c_str());
@@ -377,12 +566,12 @@ static void monitor_loop(const std::string& sample_type, int hz) {
         uint8_t th = reg_read(REG_OUT_TEMP_H);
         int16_t rt = (int16_t)((th << 8) | tl);
 
-        float gx = rx_g * kGyroScale / 1000.0f;
-        float gy = ry_g * kGyroScale / 1000.0f;
-        float gz = rz_g * kGyroScale / 1000.0f;
-        float ax = rx_a * kAccelScale / 1000.0f;
-        float ay = ry_a * kAccelScale / 1000.0f;
-        float az = rz_a * kAccelScale / 1000.0f;
+        float gx = rx_g * gyro_scale / 1000.0f;
+        float gy = ry_g * gyro_scale / 1000.0f;
+        float gz = rz_g * gyro_scale / 1000.0f;
+        float ax = rx_a * accel_scale / 1000.0f;
+        float ay = ry_a * accel_scale / 1000.0f;
+        float az = rz_a * accel_scale / 1000.0f;
         float temp = rt / kTempScale + kTempOffset;
 
         coord_transform_accel(sample_type, ax, ay, az);
@@ -414,7 +603,7 @@ static void print_diagnosis_hint() {
     printf("    → 检查: ls /dev/spidev*  / 量测 VDD_IMU 电压\n\n");
     printf("  CTRL 寄存器全 0\n");
     printf("    → Init() 未被调用，或 WriteRegister 没有成功（SPI Write CS 极性问题）\n");
-    printf("    → 尝试: ./imu_reg_tool write 0x10 0x48 再重跑诊断\n\n");
+    printf("    → 尝试: 停止 IMU 服务后执行 ./imu_diag <spi_dev> restore\n\n");
     printf("  STATUS_REG XLDA/GDA = 0\n");
     printf("    → ODR 可能为 0 (PowerDown 模式) / BDU 未使能导致数据锁定\n");
     printf("    → 检查 CTRL1_XL 高4位 != 0, CTRL3_C bit[6]=1\n\n");
@@ -427,6 +616,33 @@ static void print_diagnosis_hint() {
 }
 
 // ============================================================
+// 命令行帮助
+// ============================================================
+static void print_usage(const char* program) {
+    printf(
+        "Usage:\n"
+        "  %s [spi_dev] [sample_type] [hz]       诊断并实时监控\n"
+        "  %s <spi_dev> range show               查看当前量程\n"
+        "  %s <spi_dev> range accel <2|4|8|16>\n"
+        "  %s <spi_dev> range gyro <125|250|500|1000|2000|4000>\n"
+        "  %s <spi_dev> restore                  恢复机器人默认配置\n"
+        "\n"
+        "修改寄存器前必须停止 imu_node/lowlevel_service，避免并发访问 SPI。\n",
+        program, program, program, program, program);
+}
+
+static bool command_device_check() {
+    uint8_t id = reg_read(REG_WHO_AM_I);
+    if (id != 0x6B) {
+        fprintf(stderr, COLOR_RED
+                "WHO_AM_I mismatch: got 0x%02X, expected 0x6B; refusing to write\n"
+                COLOR_RESET, id);
+        return false;
+    }
+    return true;
+}
+
+// ============================================================
 // main
 // ============================================================
 int main(int argc, char* argv[]) {
@@ -434,12 +650,79 @@ int main(int argc, char* argv[]) {
     std::string sample_type = "bsample";
     int monitor_hz = 20;
 
+    if (argc >= 2 &&
+        (strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "--help") == 0)) {
+        print_usage(argv[0]);
+        return 0;
+    }
+
     if (argc >= 2) spi_dev      = argv[1];
-    if (argc >= 3) sample_type  = argv[2];
-    if (argc >= 4) monitor_hz   = atoi(argv[3]);
-    if (monitor_hz <= 0 || monitor_hz > 200) monitor_hz = 20;
 
     signal(SIGINT, sig_handler);
+
+    if (!spi_open(spi_dev)) return 1;
+
+    if (argc >= 3 && strcmp(argv[2], "range") == 0) {
+        if (argc == 4 && strcmp(argv[3], "show") == 0) {
+            if (!command_device_check()) {
+                close(spi_fd);
+                return 1;
+            }
+            print_range_config();
+            close(spi_fd);
+            return 0;
+        }
+        if (argc != 5 ||
+            (strcmp(argv[3], "accel") != 0 && strcmp(argv[3], "gyro") != 0)) {
+            print_usage(argv[0]);
+            close(spi_fd);
+            return 2;
+        }
+
+        int range = 0;
+        if (!parse_int(argv[4], range)) {
+            fprintf(stderr, "Invalid numeric range: %s\n", argv[4]);
+            close(spi_fd);
+            return 2;
+        }
+        if (!command_device_check()) {
+            close(spi_fd);
+            return 1;
+        }
+
+        printf(COLOR_YELLOW
+               "Warning: ensure imu_node/lowlevel_service is stopped before writing.\n"
+               COLOR_RESET);
+        bool ok = strcmp(argv[3], "accel") == 0
+                      ? set_accel_range(range)
+                      : set_gyro_range(range);
+        if (ok) print_range_config();
+        close(spi_fd);
+        return ok ? 0 : 1;
+    }
+
+    if (argc >= 3 &&
+        (strcmp(argv[2], "restore") == 0 || strcmp(argv[2], "init") == 0)) {
+        if (argc != 3) {
+            print_usage(argv[0]);
+            close(spi_fd);
+            return 2;
+        }
+        if (!command_device_check()) {
+            close(spi_fd);
+            return 1;
+        }
+        printf(COLOR_YELLOW
+               "Warning: ensure imu_node/lowlevel_service is stopped before restoring.\n"
+               COLOR_RESET);
+        bool ok = restore_default_config();
+        close(spi_fd);
+        return ok ? 0 : 1;
+    }
+
+    if (argc >= 3) sample_type = argv[2];
+    if (argc >= 4) monitor_hz = atoi(argv[3]);
+    if (monitor_hz <= 0 || monitor_hz > 200) monitor_hz = 20;
 
     printf(COLOR_BOLD COLOR_CYAN
            "========================================\n"
@@ -447,8 +730,6 @@ int main(int argc, char* argv[]) {
            "  SPI: %s   sample_type: %s\n"
            "========================================\n"
            COLOR_RESET, spi_dev, sample_type.c_str());
-
-    if (!spi_open(spi_dev)) return 1;
 
     // ---- 逐层检查 ----
     bool spi_ok = check_who_am_i();

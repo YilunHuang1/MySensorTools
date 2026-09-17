@@ -1,3 +1,50 @@
+# Current Aorta / ROS MCAP benchmark
+
+Use the source entry point `ir_qr_bench.py`, installed with `pip install -e '.[analysis,infrared]'`.
+It passively captures Aorta frames or reads an existing MCAP; it does not change
+GPIO, lighting, services or robot motion.
+
+```bash
+python infrared/ir_qr_bench/ir_qr_bench.py --mcap infrared.mcap --save-annotated
+# On a robot with an already-publishing camera:
+python infrared/ir_qr_bench/ir_qr_bench.py --duration 10 --save-failed-frames
+# Optional calibrated tag-in-camera pose (physical tag size in meters):
+python infrared/ir_qr_bench/ir_qr_bench.py --mcap infrared.mcap --calibration sensors.yaml --tag-size 0.05
+```
+
+For a camera that is normally disabled, the Aorta equivalent of the old ROS
+SetBool call is the following (run on the robot after sourcing its environment):
+
+```bash
+aorta service call /infrared_camera/enable '{"data":true}' --timeout 8
+# Run the bounded capture/benchmark while enabled.
+aorta service call /infrared_camera/enable '{"data":false}' --timeout 8
+```
+
+Check `status: SUCCESS` in each reply. Restore the original state even if capture
+fails; the benchmark itself does not toggle the camera. Dog 199 was temporarily
+enabled for validation and restored to disabled: 25 mono8 frames and 25 H.265
+messages at approximately 15 Hz; a subsequent two-second capture had no images.
+All 25 raw frames were exported and processed by this detector. No target ID 2 was
+detected in that scene, so physical target detection/pose accuracy is not claimed.
+
+Outputs include per-frame CSV, detection rate and margin statistics, optional
+failed/annotated images, and optional **tag-in-camera** pose. This pose is not the
+old binary's robot-in-dock X/Y/yaw; robot/dock extrinsics and geometry are required
+for that conversion. Calibration resolution must match the images. ISP and IR
+lighting are marked unmeasured. The detector is the public
+[pupil-apriltags](https://github.com/pupil-labs/apriltags) library using `tagCircle21h7`.
+The synthetic test generates an actual tag and checks both detection and rejection
+of a blank frame. Real-scene execution is checked separately from physical tag/pose acceptance.
+
+## Historical binary documentation (ROS only; not the current entry point)
+
+`ir_qr_bench_exec` is an existing binary without its build sources in this repository.
+Do not use it on current Aorta deployments. Its old `--ir-light` options change GPIO;
+the instructions below are retained solely to document its historical behavior.
+
+---
+
 # ir_qr_bench_tool 使用手册
 
 红外相机二维码（AprilTag）识别率测试工具。用于评估红外 ISP 画质、补光灯策略和 AprilTag 识别性能。

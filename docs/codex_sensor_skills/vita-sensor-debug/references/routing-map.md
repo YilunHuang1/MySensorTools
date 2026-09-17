@@ -17,7 +17,7 @@ Use this map after normalizing the problem time and evidence source.
 | `/lidar_points`, LiDAR packets, VanJee, RTC/time sync, point cloud empty/sparse | `lidar-debug` |
 | `/image_left_raw/*`, `/image_right_raw/*`, `/stereo/*/isp_status` | `stereo-debug` |
 | `/infrared_camera/image_raw`, `/infrared_camera/video_h265`, IR fill light, SC202CS | `infrared-debug` |
-| `/uwb/data`, `/uwb/state`, `/uwb/head_touch`, BLE pairing, anchor/tag faults | `uwb-debug` |
+| `uwb/ranging (legacy /uwb/data)`, `/uwb/state`, `/uwb/head_touch`, BLE pairing, anchor/tag faults | `uwb-debug` |
 | `/x5/vlog`, `/s100/vlog`, unknown fault, broad MCAP/log timeline | `robot-rosbag-log-triage` |
 
 ## Application-To-Sensor Hints

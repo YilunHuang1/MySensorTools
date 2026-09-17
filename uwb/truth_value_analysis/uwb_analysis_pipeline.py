@@ -191,24 +191,19 @@ def locate_raw_data_dirs(cfg: dict) -> list:
 
 
 def copy_mcap_to_raw(source_dirs, recursive: bool = False):
-    """从指定 source_dirs 中收集 .mcap 文件并复制到 raw_data/同名文件夹/ 下。"""
+    """Copy this run's inputs; refuse basename collisions instead of mixing runs."""
+    sources = sorted({p.resolve() for root in source_dirs
+                      for p in (root.rglob('*.mcap') if recursive else root.glob('*.mcap'))})
+    names = [p.name for p in sources]
+    if len(names) != len(set(names)):
+        raise ValueError('Duplicate MCAP filenames across sources; analyze those sources separately')
     files = []
-    for sd in source_dirs:
-        try:
-            it = sd.rglob('*.mcap') if recursive else sd.glob('*.mcap')
-            for fp in sorted(it):
-                files.append(fp)
-                dest_folder = RAW_DIR / fp.stem
-                dest_folder.mkdir(parents=True, exist_ok=True)
-                dest_file = dest_folder / fp.name
-                if not dest_file.exists():
-                    shutil.copy2(fp, dest_file)
-        except Exception as e:
-            # 延后定义的 log_error 会在运行时可用；若未定义则静默
-            try:
-                log_error('scan_copy', str(sd), f'遍历/复制失败: {e}')
-            except Exception:
-                pass
+    for source in sources:
+        destination = RAW_DIR / source.stem / source.name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if source != destination.resolve():
+            shutil.copy2(source, destination)
+        files.append(destination)
     return files
 
 # 新增：从文件名解析真值（距离cm、角度deg、可选高度cm），返回统一单位
@@ -355,13 +350,9 @@ def distance_series_m(df: pd.DataFrame, cfg: dict) -> pd.Series:
     return s
 
 
-def detect_version_by_angles(df: pd.DataFrame, fallback: str = '007') -> str:
-    """若路径无法判断版本，尝试用角度分布启发式判断：存在负角度则倾向 062。"""
-    if 'angle' in df.columns:
-        ang = df['angle'].astype(float)
-        if (ang.min() < 0.0) and (ang.max() <= 180.0 + 1e-6):
-            return '062'
-    return fallback
+def detect_version_by_angles(df: pd.DataFrame, fallback: str = 'unknown') -> str:
+    """Angle sign is a convention, not proof of firmware/hardware version."""
+    return fallback if fallback in ('007', '062') else 'unknown'
 
 
 def angle_signed_diff_vec(measured_deg: Union[pd.Series, np.ndarray], truth_deg: float) -> np.ndarray:
@@ -496,7 +487,7 @@ def process_one_file(mcap_path: Path, cfg: dict) -> dict:
             'generated_at_iso': datetime.now().isoformat(timespec='seconds'),
         }
 
-    # 版本信息：优先路径判断，若不含关键字则用角度分布启发式
+    # Only explicit historical path metadata identifies firmware; angles do not.
     version_guess = detect_version_from_path(mcap_path)
     version = detect_version_by_angles(df, fallback=version_guess)
 
@@ -1341,17 +1332,24 @@ def parse_args():
     parser.add_argument('--no-prefer-filtered', dest='prefer_filtered', action='store_false', help='不优先使用 filtered 列')
     parser.add_argument('--clean', action='store_true', help='运行前清理旧的 raw_data 目录')
     parser.add_argument('--filter-height', type=float, default=None, help='筛选特定高度的数据（单位：厘米），例如 --filter-height 0 只分析高度为0的数据')
+    parser.add_argument('--output-dir', type=Path, help='Analysis root (raw copies and processed results)')
     parser.add_argument('--self-test', action='store_true', help='运行自检（不依赖mcap数据），验证文件名解析与角度误差计算')
     parser.set_defaults(prefer_filtered=None)
     return parser.parse_args()
 
 
 def main():
+    global ANALYSIS_ROOT, RAW_DIR, RESULT_DIR, PER_FILE_DIR, OVERALL_DIR
+    args = parse_args()
+    cfg = load_config()
+    if args.output_dir:
+        ANALYSIS_ROOT = args.output_dir.resolve()
+        RAW_DIR = ANALYSIS_ROOT / 'raw_data'
+        RESULT_DIR = ANALYSIS_ROOT / 'processed_results'
+        PER_FILE_DIR = RESULT_DIR / 'per_file_stats'
+        OVERALL_DIR = RESULT_DIR / 'overall'
     print(f"准备分析目录: {ANALYSIS_ROOT}")
     ensure_dirs()
-
-    cfg = load_config()
-    args = parse_args()
 
     if args.self_test:
         ok = run_self_tests()
@@ -1407,6 +1405,8 @@ def main():
     recursive_flag = args.recursive or bool(cfg['raw_source_locator'].get('recursive', False))
     src_files = copy_mcap_to_raw(source_dirs, recursive=recursive_flag)
     print(f"已复制/就绪 .mcap 文件数: {len(src_files)}")
+    if not src_files:
+        raise ValueError('No MCAP inputs found')
 
     # 遍历 raw_data 下每个文件夹进行统计
     stats_rows = []
@@ -1417,16 +1417,7 @@ def main():
     total_files = 0
     filtered_files = 0
     
-    for folder in sorted(RAW_DIR.iterdir()):
-        if not folder.is_dir():
-            continue
-        mcap_files = list(folder.glob('*.mcap'))
-        if not mcap_files:
-            log_error('missing_mcap', folder.name, '该文件夹下未发现 .mcap 文件')
-            print(f"警告: {folder.name} 下未发现 .mcap 文件")
-            continue
-        # 约定每文件夹仅一个 .mcap
-        mcap_path = mcap_files[0]
+    for mcap_path in src_files:
         total_files += 1
         
         # 高度筛选逻辑
@@ -1478,6 +1469,9 @@ def main():
         except Exception as e:
             log_error('aggregate_series', str(mcap_path), f'汇总序列失败: {e}')
 
+    if not stats_rows or not any(row.get('data_count', 0) for row in stats_rows):
+        raise ValueError('No usable UWB measurements in selected inputs')
+
     # 输出每文件 CSV
     save_per_file_stats(stats_rows)
 
@@ -1516,6 +1510,11 @@ def main():
         print(f"  - 单独报告数量: {len(accuracy_reports)}")
         print(f"  - 总体摘要报告: overall_accuracy_summary.md")
 
+    return 1 if ERRORS or any(not row.get('data_count', 0) for row in stats_rows) else 0
+
 
 if __name__ == '__main__':
-    main()
+    try:
+        raise SystemExit(main())
+    except (OSError, ValueError) as error:
+        raise SystemExit(f'error: {error}')

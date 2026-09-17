@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """可视化 PCD 点云帧 - 支持 Open3D 或 Matplotlib 后端"""
 import sys
+from pathlib import Path
 import os
 import glob
 import argparse
@@ -15,7 +16,8 @@ def visualize_with_open3d(pcd_path, frame_idx, points):
         return False
 
     print(f"使用 Open3D 后端...")
-    pcd = o3d.io.read_point_cloud(pcd_path)
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(points[:, :3])
 
     # 按高度着色
     z_min, z_max = points[:, 2].min(), points[:, 2].max()
@@ -41,7 +43,7 @@ def visualize_with_open3d(pcd_path, frame_idx, points):
     return True
 
 
-def visualize_with_matplotlib(pcd_path, frame_idx, points):
+def visualize_with_matplotlib(pcd_path, frame_idx, points, output=None):
     """使用 Matplotlib 可视化（备用）"""
     try:
         import matplotlib.pyplot as plt
@@ -76,46 +78,38 @@ def visualize_with_matplotlib(pcd_path, frame_idx, points):
     ax.set_title(f"Vanjee 722Z - Frame {frame_idx} ({len(points)} pts)")
     plt.colorbar(scatter, ax=ax, label="Height (normalized)")
     plt.tight_layout()
-    plt.show()
+    if output:
+        Path(output).parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(output, dpi=150)
+        plt.close()
+    else:
+        plt.show()
     return True
 
 
 def read_pcd_binary(pcd_path):
-    """读取 PCD binary 文件"""
-    with open(pcd_path, 'rb') as f:
-        header_lines = []
-        while True:
-            line = f.readline().decode('ascii').strip()
-            header_lines.append(line)
-            if line.startswith('DATA'):
-                break
-
-        # 解析 header
-        n_points = None
-        for line in header_lines:
-            if line.startswith('POINTS'):
-                n_points = int(line.split()[1])
-                break
-
-        if n_points is None:
-            raise ValueError("无法从 PCD 文件中获取点数")
-
-        # 读取二进制数据 (4个 float32: x, y, z, intensity)
-        data = np.frombuffer(f.read(n_points * 16), dtype=np.float32)
-        points = data.reshape(n_points, 4)
-        return points
+    """Read XYZI from either ASCII or binary PCD, honoring the declared types."""
+    from sensor_tools.pcd import xyzi
+    return xyzi(pcd_path)
 
 
 def main():
     parser = argparse.ArgumentParser(description="Visualize one PCD frame")
     parser.add_argument("frame_idx", nargs="?", type=int, default=10, help="Frame index")
     parser.add_argument("--pcd-dir", default="pcd_output", help="Directory containing frame_XXXX.pcd")
+    parser.add_argument("--output", help="Save a PNG using the headless Matplotlib backend")
     args = parser.parse_args()
+    if args.output:
+        import matplotlib
+        matplotlib.use("Agg")
     pcd_dir = args.pcd_dir
 
     # 选择要可视化的帧
     frame_idx = args.frame_idx
-    pcd_path = os.path.join(pcd_dir, f'frame_{frame_idx:04d}.pcd')
+    candidates = sorted(Path(pcd_dir).glob(f'frame_{frame_idx:04d}*.pcd'))
+    if len(candidates) > 1:
+        raise SystemExit('error: multiple files match this frame index')
+    pcd_path = str(candidates[0]) if candidates else os.path.join(pcd_dir, f'frame_{frame_idx:04d}.pcd')
 
     if not os.path.exists(pcd_path):
         print(f"❌ 文件不存在: {pcd_path}")
@@ -124,10 +118,13 @@ def main():
         if files:
             print(f"  第一帧: {os.path.basename(files[0])}")
             print(f"  最后帧: {os.path.basename(files[-1])}")
-        return
+        raise SystemExit(1)
 
     print(f"📂 加载: {pcd_path}")
     points = read_pcd_binary(pcd_path)
+    points = points[np.isfinite(points[:, :3]).all(axis=1)]
+    if not len(points):
+        raise SystemExit("error: no finite points")
 
     print(f"✓ 点数: {len(points)}")
     print(f"  X 范围: [{points[:,0].min():.3f}, {points[:,0].max():.3f}] m")
@@ -137,6 +134,9 @@ def main():
 
     # 尝试使用 Open3D，失败则使用 Matplotlib
     print("\n🎨 启动可视化...")
+    if args.output:
+        visualize_with_matplotlib(pcd_path, frame_idx, points, args.output)
+        return
     if visualize_with_open3d(pcd_path, frame_idx, points):
         return
     elif visualize_with_matplotlib(pcd_path, frame_idx, points):

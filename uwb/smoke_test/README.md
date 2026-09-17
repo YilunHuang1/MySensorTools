@@ -1,133 +1,64 @@
 # UWB 冒烟测试工具
 
-供应商交付新 UWB 固件（Anchor D6）和信令固件（Tag D5）后的冒烟测试工具。
+用于检查 Anchor/Tag 固件、连接状态、测距数据和串口协议。
+本目录的 online 模式已迁移到 Aorta；`../bench_control` 是用户保留的旧 ROS
+台架工具，两者独立，不需要为了运行冒烟测试而执行台架流程。
 
-## 两种模式
+## 安装
 
-| 模式 | 说明 | 使用场景 |
-|------|------|----------|
-| `standalone` | 停止 `uwb` 服务，直接串口验证 Anchor | 新固件首次验证、产线测试 |
-| `online` | 利用 ROS2 接口，不停服务 | 日常巡检、持续监控 |
-
-## 依赖
+在仓库根目录执行：
 
 ```bash
-pip install pyserial pyyaml
+pip install -e '.[device]'
 ```
 
-## 使用方式
+## Online：不停服务的在线检查
 
-### Standalone 模式（需停服务，仅验证 Anchor）
-
-```bash
-# 先停止 uwb 服务
-systemctl stop uwb
-
-# 运行测试（默认串口 /dev/ttyS7）
-python3 uwb_smoke_test.py --mode standalone
-
-# 指定串口
-python3 uwb_smoke_test.py --mode standalone --serial-port /dev/ttyS7
-
-# 测试完成后重启服务
-systemctl start uwb
-```
-
-### Online 模式（不停服务，需 source 环境）
+在机器人上加载运行环境，使用部署的 `aorta` 和 `aorta-record`：
 
 ```bash
 source /app/script/env.sh
-python3 uwb_smoke_test.py --mode online
-
-# 指定测距采集时长（秒）
-python3 uwb_smoke_test.py --mode online --ranging-duration 15
+python3 uwb/smoke_test/uwb_smoke_test.py --mode online --output-dir reports
+python3 uwb/smoke_test/uwb_smoke_test.py --mode online --ranging-duration 15 --output-dir reports
 ```
 
-### 通用选项
+online 模式**不主动开启测距**，也不修改配对、切换机器人模式或重启服务。
+仓库中迁移前的 ROS online 实现也是通过订阅 `/uwb/data` 检查测距，未发送
+开启命令。Tag 与 Anchor 已连接（`CONNECTED`）不代表测距已开启（`RANGING`）。
+未开启时仍可运行冒烟测试：版本、连接、电量、当前故障分别检查，测距项报告
+未完成，数据项跳过；不会把这种状态误报为串口/连接故障或测距通过。
+
+| 检查 | Aorta 接口 / 验收范围 |
+|---|---|
+| Anchor、Tag 版本 | `firmware_version/uwb`，请求 `target_device_type: 3`，分别按设备名称读取返回版本 |
+| Tag 状态、电量 | `uwb/state`；`CONNECTED` 和 `RANGING` 均为可接受连接状态 |
+| 测距帧率 | 录制 `uwb/ranging`，检查发布时钟和实际帧率；`--min-frame-rate` 应填写部署配置中的阈值 |
+| 数据完整性 | 使用同一份采集数据，检查距离、角度、俯仰、滤波值和置信度；统计不等于定位精度验收 |
+| 当前故障 | `software/faultmgr/get_faults_info` 的 type 3 当前快照；这是系统全量结果，不是仅 UWB 的历史故障 |
+
+不指定 `--min-frame-rate` 时只报告测量帧率，不擅自套用旧固件的固定阈值。
+零测距帧或阈值未指定时，整体结果为 `INCOMPLETE`，退出码 2。
+退出码 0 表示全部检查通过；退出码 1 表示至少一项明确失败。
+
+## Standalone：隔离后直接检查 Anchor 串口
+
+此模式发送串口命令并重启 Anchor，需要先隔离占用串口的生产服务。
+脚本本身不会停止或恢复系统服务，`--allow-device-control` 是显式操作开关。
+需按现场流程记录原服务状态，并在测试完成或失败后恢复。
 
 ```bash
-# 指定报告输出目录
-python3 uwb_smoke_test.py --mode standalone --output-dir ./reports
-
-# 显示详细日志
-python3 uwb_smoke_test.py --mode online -v
+python3 uwb/smoke_test/uwb_smoke_test.py --mode standalone \
+  --serial-port /dev/ttyS7 --allow-device-control --output-dir reports
 ```
 
-## 检查项
+入口检查串口通信、版本、重启恢复、心跳、错误状态及 CRC。
+没有收到错误状态消息时报告未知，不等同于“没有硬件故障”。
+底层解析器支持 CRC 校验、多 TLV、C5 扩展 RSSI 和已确认的固件长度例外。
+`checks_standalone.py` 另有可调用的测距辅助检查，但当前 standalone 入口不运行它们。
 
-| # | 检查项 | standalone | online |
-|---|--------|:---:|:---:|
-| 1 | 串口通信 | ✅ | - |
-| 2 | Anchor 版本 | ✅ | ✅ |
-| 3 | Anchor 重启恢复 | ✅ | - |
-| 4 | 心跳检测 | ✅ | - |
-| 5 | 错误状态 | ✅ | ✅ |
-| 6 | CRC 校验完整性 | ✅ | - |
-| 7 | Tag 版本 | - | ✅ |
-| 8 | Tag 状态/电量 | - | ✅ |
-| 9 | 测距功能 | - | ✅ |
-| 10 | 数据质量 | - | ✅ |
+## 报告与验证
 
-## 报告
-
-测试完成后会在终端输出结果摘要，并生成 JSON 报告文件：
-`smoke_test_report_YYYYMMDD_HHMMSS.json`
-
-
-
-online测试说明
-1. Anchor 版本 — 5.1.35
-调用 ROS2 service uwb/get_device_info，传参 {target_device_type: 3}（3 = Anchor），解析响应里的 sw_version 字段，与最低版本 5.0.24 比较。
-
-2. Tag 版本 — SW 0.2.22
-同上调用 uwb/get_device_info，传参 {target_device_type: 2}（2 = Tag），解析 sw_version，与最低版本 0.1.15 比较。
-
-3. Tag 状态/电量 — 电量 77%, 状态 RANGING
-订阅 ROS2 topic uwb/tag_status，读取一帧，提取：
-battery_level：电量百分比，低于 20% 告警
-state：枚举值映射为文字（IDLE / RANGING / ERROR 等），不为 ERROR 即 PASS
-
-4. 测距功能 — 帧率 20.8Hz
-订阅 uwb/uwb_data topic，采集 10 秒（可 --ranging-duration 调整），统计收到的帧数： 
-帧率 ≥ 10Hz 即 PASS，验证 Anchor ↔ Tag 测距链路正常工作。
-
-5. 数据质量 — 230帧; 距离均值 0.45m; 角度均值 -31.4°; confidence 98; 标准差 0.00m
-同样用采集到的 uwb/uwb_data 帧，计算：
-
-距离均值/标准差：标准差 > 0.5m 告警（数据抖动太大）
-confidence 均值：< 50 告警（信号质量差）
-角度均值：仅展示，不判断（取决于摆放位置）
-标准差 0.00m + confidence 98 说明信号质量极好（Tag 就在 Anchor 旁边）。
-
-6. 错误状态 — 无异常状态上报
-订阅 uwb/error_status topic，监听 3 秒，检查是否有错误帧上报（error_code ≠ 0）。
-与 standalone 的区别：standalone 直接从串口抓 0xC7 TLV，online 是从 uwb_node 解析后透传出来的 ROS2 topic，验证的是软件栈端到端的错误传递链路。
-
-standalone测试说明
-1. 串口通信 — 响应延迟 23ms
-发送一个 Reboot 命令帧（TLV type=0x05）到串口，然后计时等待 Anchor 回复 DeviceRestartInfo（0x53）。
-
-从发送到收到回复的时间 = 响应延迟。说明串口物理链路通，且 Anchor 固件在响应命令。
-
-2. Anchor 版本 — 5.1.35 (≥ 5.0.24)
-解析第 1 步收到的 0x53 DeviceRestartInfo TLV 里的版本字段（sw_version），与代码里内置的最低版本常量 MIN_ANCHOR_VERSION = "5.0.24" 做语义版本比较（major.minor.patch）。
-
-3. Anchor 重启恢复 — 重启后 0.0s 恢复
-再次主动发 Reboot 命令（0x05），记录发送时间，然后监听串口等待新的 0x53 DeviceRestartInfo。
-
-收到的时刻 − 发送时刻 = 恢复耗时。验证固件重启后能正常自举并上报版本信息。
-
-4. Anchor 心跳 — 5 个心跳 (1.0Hz)
-监听串口 5 秒，统计收到的 0x59 Heartbeat TLV 数量，并计算实际频率。
-
-Anchor 固件规格是 1Hz 心跳，收到 ≥ 4 个且频率在 0.8~1.2Hz 范围内即 PASS。验证固件运行稳定、没有卡死。
-
-5. 错误状态 — 无错误
-同样在监听串口期间，检查是否收到 0xC7 Error Status TLV。
-
-该 TLV 是 Anchor 固件主动上报的异常包（如测距超时、硬件故障等）。5 秒内没有收到 = 无错误。
-
-6. CRC 校验完整性 — 0/7 CRC 失败
-对监听期间收到的所有帧，用 CRC-16-XMODEM 算法重新计算帧内容的校验值，与帧尾附带的 CRC 字段对比。
-
-失败帧数/总帧数 = CRC 错误率。不为 0 说明串口存在误码（线缆质量差、波特率偏差、EMI 干扰等）。
+终端及 `smoke_test_report_YYYYMMDD_HHMMSS.json` 均保留逐项结果。
+本地回归覆盖协议错误、断连、停止测距清理及在线缺数据分支；硬件实测范围见
+[逐工具验收表](../../docs/TOOL_VALIDATION_MATRIX.md)。串口模拟通过不代表已经完成
+Anchor 重启、BLE 配对和射频测距的物理验收。

@@ -2,7 +2,7 @@
 
 ASM330LHHTR IMU 全链路诊断工具，用于快速定位 IMU 数据异常（全 0 / 偶发丢失）的根因。
 
-> 源码同步备份自：`vita-robot/src/middleware/sensor/imu/test/imu_diag.cpp`  
+> 源码同步备份自：`vita-robot/src/middleware/sensor/imu/test/imu_diag.cpp`
 > 放在此处是为了防止 vita-robot 代码更新覆盖丢失。
 
 ---
@@ -20,11 +20,16 @@ g++ -std=c++17 -O2 imu_diag.cpp -o imu_diag
 ## 用法
 
 ```
-./imu_diag [spi_dev] [sample_type] [hz]   全链路诊断 + 实时监控
-./imu_diag [spi_dev] init                  手动写入 CTRL 寄存器使 IMU 上电
-./imu_diag [spi_dev] write <addr> <val>    写单个寄存器 (hex)
-./imu_diag [spi_dev] read  <addr>          读单个寄存器 (hex)
+./imu_diag [spi_dev] [sample_type] [hz]        全链路诊断 + 实时监控
+./imu_diag <spi_dev> range show                查看当前量程
+./imu_diag <spi_dev> range accel <range_g>     修改加速度计量程
+./imu_diag <spi_dev> range gyro <range_dps>    修改陀螺仪量程
+./imu_diag <spi_dev> restore                   恢复机器人默认配置
 ```
+
+> **写寄存器前必须停止 `imu_node` / `lowlevel_service` 等正在访问同一
+> SPI 设备的服务。** 工具修改的是芯片易失寄存器，IMU 驱动重启后会重新写入
+> 生产默认配置。
 
 | 平台 | SPI 设备 | sample_type |
 |------|----------|-------------|
@@ -40,15 +45,23 @@ g++ -std=c++17 -O2 imu_diag.cpp -o imu_diag
 # 指定监控频率 50Hz
 ./imu_diag /dev/spidev0.0 bsample 50
 
-# 手动 Init（IMU 处于 Power-Down 时使用）
-./imu_diag /dev/spidev0.0 init
+# 查看当前量程及寄存器值
+./imu_diag /dev/spidev0.0 range show
 
-# 读单个寄存器
-./imu_diag /dev/spidev0.0 read 0x0F     # WHO_AM_I
+# 加速度计支持 ±2g、±4g、±8g、±16g
+./imu_diag /dev/spidev0.0 range accel 8
 
-# 写单个寄存器
-./imu_diag /dev/spidev0.0 write 0x10 0x48   # CTRL1_XL: 104Hz ±4g
+# 陀螺仪支持 ±125/250/500/1000/2000/4000 dps
+./imu_diag /dev/spidev0.0 range gyro 1000
+
+# 软件复位后恢复机器人生产默认值：
+# Accel 104Hz ±4g，Gyro 104Hz ±250dps，BDU=1，IF_INC=1
+./imu_diag /dev/spidev0.0 restore
 ```
+
+量程命令采用 read-modify-write，只修改量程位，保留当前 ODR 和滤波配置；
+写入后会强制回读校验。诊断和监控模式会根据当前量程自动选择正确的
+mg/LSB、mdps/LSB 换算系数。
 
 ---
 
@@ -76,11 +89,7 @@ g++ -std=c++17 -O2 imu_diag.cpp -o imu_diag
 ### 故障 2：WHO_AM_I 读回 `0xFF`
 - MISO 悬空，SPI 线未接 / CS 极性错误
 
-### 故障 3：WHO_AM_I 正常，CTRL 寄存器全 0，写操作 readback 全 0
-```
-Writing 0x48 to register 0x10 ...
-  ✗ MISMATCH: wrote 0x48, read back 0x00
-```
+### 故障 3：WHO_AM_I 正常，但 `restore` 写后回读不一致
 - **MOSI（SDI）线路故障**（虚焊 / 断路）
 - 读走 MISO，写走 MOSI，两者独立
 - 虚焊时 WHO_AM_I 偶尔能读到（1 字节概率性成功），写操作需 2 字节全部到达故障率更高
@@ -108,7 +117,12 @@ Writing 0x48 to register 0x10 ...
 | OUTX_L_G | 0x22 | — | Gyro X 低字节 |
 | OUTX_L_XL | 0x28 | — | Accel X 低字节 |
 
-换算系数（与 `imu.cpp` 一致）：
-- Accel: `raw × 0.122 / 1000` → 单位 g（±4g 量程）
-- Gyro:  `raw × 8.75 / 1000`  → 单位 deg/s（±250dps 量程）
-- Temp:  `raw / 256 + 25`     → 单位 °C
+工具根据 CTRL1_XL/CTRL2_G 当前量程动态选择换算系数：
+
+- Accel ±2/4/8/16g：0.061/0.122/0.244/0.488 mg/LSB
+- Gyro ±125/250/500/1000/2000/4000dps：
+  4.37/8.75/17.5/35/70/140 mdps/LSB
+- Temp：`raw / 256 + 25` → 单位 °C
+
+机器人驱动 `imu.cpp` 仍固定按 ±4g、±250dps 换算；驱动启动时也会恢复该
+量程。因此本工具的量程修改用于停止驱动后的独立诊断和实验。

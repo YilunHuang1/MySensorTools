@@ -12,6 +12,8 @@ def resolve_xy_columns(df: pd.DataFrame, x_col: Optional[str], y_col: Optional[s
         (x_col, y_col),
         ("x_m", "y_m"),
         ("x", "y"),
+        ("filtered_x_m", "filtered_y_m"),
+        ("raw_x_m", "raw_y_m"),
     ]
     for x_name, y_name in candidates:
         if x_name and y_name and x_name in df.columns and y_name in df.columns:
@@ -37,17 +39,18 @@ def plot_2d(df: pd.DataFrame, x_col: str, y_col: str, output: Optional[str]) -> 
 
 
 def plot_3d(df: pd.DataFrame, x_col: str, y_col: str, output: Optional[str]) -> None:
-    if "pitch" not in df.columns or "原始距离" not in df.columns:
-        raise ValueError("3D mode requires columns: pitch, 原始距离")
-    pitch_rad = np.radians(df["pitch"])
-    z = df["原始距离"] * np.sin(pitch_rad)
+    distance_col = 'distance_filtered' if x_col == 'filtered_x_m' else 'distance' if 'distance' in df.columns else '原始距离'
+    if 'pitch' not in df.columns or distance_col not in df.columns:
+        raise ValueError('3D mode requires pitch in degrees and distance in meters')
+    pitch_rad = np.radians(df['pitch'])
+    z = df[distance_col] * np.sin(pitch_rad)
 
     fig = plt.figure(figsize=(10, 8))
     ax = fig.add_subplot(111, projection="3d")
     ax.scatter(df[x_col], df[y_col], z, s=12, alpha=0.75)
     ax.set_xlabel(x_col)
     ax.set_ylabel(y_col)
-    ax.set_zlabel("z")
+    ax.set_zlabel("height estimate (m)")
     ax.set_title("UWB 3D trajectory")
     fig.tight_layout()
     if output:
@@ -67,6 +70,10 @@ def main() -> None:
 
     csv_path = Path(args.csv)
     df = pd.read_csv(csv_path)
+    if df.empty:
+        parser.error("CSV contains no data")
+    if args.output:
+        Path(args.output).parent.mkdir(parents=True, exist_ok=True)
     x_col, y_col = resolve_xy_columns(df, args.x_col, args.y_col)
 
     if args.mode == "2d":

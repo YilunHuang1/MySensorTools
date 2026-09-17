@@ -1,3 +1,9 @@
+> Aorta migration (2026-09-17): install the repository root package first with
+> `pip install -e '.[analysis,device,infrared]'`. Offline MCAP readers accept embedded
+> CDR/BFBS/JSON schemas; live tools use Aorta. Historical ROS commands, fixed paths,
+> sample versions and results below are archival context. Use each updated entry's
+> `--help` and `docs/TOOLS_GUIDE.md` for current commands and verification limits.
+
 # UWB 真值准度分析（距离 & 角度）
 
 本目录提供一个面向批量 MCAP 数据的分析脚本，基于文件名真值（距离/角度/高度）计算测量误差，生成每文件与总体统计报告，并输出角度误差可视化图。

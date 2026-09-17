@@ -5,6 +5,8 @@ description: Triage Vita robot ROS2 bag, MCAP, and log problems across sensors. 
 
 # Robot Rosbag Log Triage
 
+Current transport guidance: [Aorta](../AORTA.md).
+
 Use this skill before sensor-specific diagnosis when the user provides an MCAP/rosbag/log archive and an approximate problem time.
 
 ## Workflow
@@ -30,7 +32,7 @@ Use this skill before sensor-specific diagnosis when the user provides an MCAP/r
 
 ## Useful Commands
 
-When ROS2 is available:
+Read [the Aorta contract](../AORTA.md). For historical ROS recordings only:
 
 ```bash
 ros2 bag info <bag_dir_or_mcap>

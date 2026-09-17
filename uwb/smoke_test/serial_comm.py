@@ -14,6 +14,7 @@ from typing import Optional, List, Tuple, Callable
 from dataclasses import dataclass, field
 
 import serial
+from sensor_tools.uwb_serial import tlvs as decode_tlvs
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
@@ -84,20 +85,8 @@ class TLV:
 
 
 def parse_tlvs(data: bytes) -> List[TLV]:
-    """解析 TLV 列表，兼容 0xC5 固件 quirk（len 0x22 实际 0x26）。"""
-    result = []
-    offset = 0
-    while offset + 2 <= len(data):
-        tlv_type = data[offset]
-        tlv_len = data[offset + 1]
-        # 固件 quirk: AOA 0xC5 报 len=0x22 实际有效 0x26
-        if tlv_type == 0xC5 and tlv_len == 0x22 and (offset + 2 + 0x26) <= len(data):
-            tlv_len = 0x26
-        if offset + 2 + tlv_len > len(data):
-            break
-        result.append(TLV(type=tlv_type, value=data[offset + 2: offset + 2 + tlv_len]))
-        offset += 2 + tlv_len
-    return result
+    """Decode strict TLVs plus the verified C5 firmware length exception."""
+    return [TLV(type=kind, value=value) for kind, value in decode_tlvs(data)]
 
 
 # ── Packet ───────────────────────────────────────────────────────────────────
@@ -154,6 +143,7 @@ class SerialComm:
         # 统计
         self.total_packets_received = 0
         self.crc_errors = 0
+        self.protocol_errors = 0
 
     def open(self) -> bool:
         try:
@@ -164,6 +154,7 @@ class SerialComm:
                 parity=serial.PARITY_NONE,
                 stopbits=serial.STOPBITS_ONE,
                 timeout=0.1,
+                exclusive=True,
             )
             self._buffer.clear()
             return True
@@ -182,9 +173,12 @@ class SerialComm:
     def send(self, tlvs: List[TLV]) -> bytes:
         """发送 TLV 数据包，返回发送的原始字节。"""
         pkt = build_packet(tlvs)
-        if self._ser:
-            self._ser.write(pkt)
-            self._ser.flush()
+        if not self.is_open:
+            raise RuntimeError('serial port is not open')
+        written = self._ser.write(pkt)
+        if written != len(pkt):
+            raise OSError(f'short serial write: {written}/{len(pkt)} bytes')
+        self._ser.flush()
         return pkt
 
     def receive(self, timeout: Optional[float] = None) -> Optional[SerialPacket]:
@@ -239,8 +233,8 @@ class SerialComm:
             if n > 0:
                 data = self._ser.read(n)
                 self._buffer.extend(data)
-        except serial.SerialException:
-            pass
+        except serial.SerialException as error:
+            raise OSError(f'serial read failed on {self.port}: {error}') from error
 
     def _try_parse(self) -> Optional[SerialPacket]:
         """尝试从 buffer 中解析一个完整包。"""
@@ -248,7 +242,7 @@ class SerialComm:
             # 寻找 sync header
             idx = self._buffer.find(HEADER_MAGIC)
             if idx < 0:
-                self._buffer.clear()
+                self._buffer[:] = HEADER_MAGIC[:1] if self._buffer.endswith(HEADER_MAGIC[:1]) else b''
                 return None
             if idx > 0:
                 del self._buffer[:idx]
@@ -272,13 +266,17 @@ class SerialComm:
             crc_received = struct.unpack_from(">H", self._buffer, HEADER_LEN + tlv_total_len)[0]
             crc_calculated = crc16_xmodem(tlv_data)
 
-            crc_ok = (crc_received == crc_calculated)
             self.total_packets_received += 1
-            if not crc_ok:
+            if crc_received != crc_calculated:
                 self.crc_errors += 1
-
-            tlvs = parse_tlvs(tlv_data)
+                del self._buffer[:1]
+                continue  # Never interpret corrupted payloads as firmware or health evidence.
             del self._buffer[:required]
-            return SerialPacket(sequence=seq, tlvs=tlvs, crc_ok=crc_ok)
+            try:
+                tlvs = parse_tlvs(tlv_data)
+            except ValueError:
+                self.protocol_errors += 1
+                continue
+            return SerialPacket(sequence=seq, tlvs=tlvs, crc_ok=True)
 
         return None

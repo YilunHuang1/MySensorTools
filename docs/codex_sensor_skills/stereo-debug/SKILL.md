@@ -5,6 +5,8 @@ description: Debug Vita robot stereo camera issues using vita-robot code-grounde
 
 # Stereo Debug
 
+Read [the Aorta contract](../AORTA.md) before these sensor-specific checks.
+
 Use this skill for X5 dual-camera/stereo issues. Verify current code and config first; do not rely on old Copilot conclusions without checking the repo.
 
 ## Workflow
@@ -19,29 +21,19 @@ Use this skill for X5 dual-camera/stereo issues. Verify current code and config 
 ## Live Checks
 
 ```bash
-ros2 topic list | grep -Ei 'image_left|image_right|stereo|camera|isp'
-ros2 topic hz /image_left_raw/h265_quarter
-ros2 topic hz /image_right_raw/h265_quarter
-ros2 topic hz /image_left_raw/nv12_quarter
-ros2 topic echo /stereo/left/isp_status --once
-ros2 topic echo /stereo/right/isp_status --once
+python camera/capture_stereo_isp.py --mode isp --duration 5 --output-root /tmp/stereo_check
 ```
 
-For recording focused data:
-
-```bash
-ros2 bag record -s mcap \
-  /image_left_raw/h265_quarter /image_right_raw/h265_quarter \
-  /image_left_raw/nv12_quarter /image_right_raw/nv12_quarter \
-  /stereo/left/isp_status /stereo/right/isp_status
-```
+Use `--mode full` for the larger stream set. Check its manifest for missing streams
+and actual decoded message counts. Publisher configuration alone does not prove a
+pipeline produces every NV12/H265 variant.
 
 ## Interpretation Rules
 
 - Treat H265 streams and NV12 raw image streams as different evidence surfaces. H265 can fail while capture still works.
-- Check both left and right topics; one-sided failures often indicate sensor/pipeline/channel config rather than global ROS transport.
+- Check both left and right topics; one-sided failures often indicate sensor/pipeline/channel config rather than global transport.
 - Use `Isp2AStatus` topics for exposure/gain clues; avoid guessing exposure behavior from image brightness alone.
-- `vita_slam` camera use depends on `slam.yaml` camera enable and configured topics. The checked config has camera disabled, so stereo may be irrelevant to SLAM unless config changes.
+- `vita_slam` camera use depends on `slam.yaml` camera enable and configured topics. Verify the deployed camera enable flag rather than assuming a historical default.
 - VLN code references `/image_left_raw/nv12_quarter` for visualization in `traj_to_cmd_task`, not necessarily as core localization input.
 
 ## Output

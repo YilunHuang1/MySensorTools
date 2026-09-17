@@ -7,6 +7,8 @@ def load_json(filepath):
         return json.load(f)
 
 def compare_dicts(d1, d2, path=""):
+    if not isinstance(d1, dict) or not isinstance(d2, dict):
+        raise ValueError("Both JSON roots must be objects")
     changes = []
     
     # Check for keys in d1
@@ -59,4 +61,5 @@ if __name__ == "__main__":
                 print(d)
                 
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)

@@ -18,63 +18,37 @@ from datetime import datetime
 
 def analyze_frame(pcd_path):
     """分析单帧点云，支持 ASCII 和 binary 格式"""
-    n_points = None
-    data_format = 'binary'
-    header_end = 0
-
-    with open(pcd_path, 'rb') as f:
-        while True:
-            line = f.readline().decode('ascii', errors='ignore').strip()
-            header_end = f.tell()
-            if line.startswith('POINTS'):
-                n_points = int(line.split()[1])
-            if line.startswith('DATA'):
-                data_format = line.split()[1].lower()  # 'ascii' or 'binary'
-                break
-
-    if n_points is None or n_points == 0:
+    from sensor_tools.pcd import xyzi
+    points = xyzi(pcd_path)
+    n_points = len(points)
+    if not n_points:
         return None
 
-    if data_format == 'ascii':
-        # ASCII 格式：逐行读取 x y z intensity
-        points = []
-        with open(pcd_path, 'r') as f:
-            for line in f:
-                if line.startswith('DATA'):
-                    break
-            for line in f:
-                vals = line.strip().split()
-                if len(vals) >= 4:
-                    points.append([float(vals[0]), float(vals[1]),
-                                   float(vals[2]), float(vals[3])])
-        points = np.array(points, dtype=np.float32)
-    else:
-        # Binary 格式
-        with open(pcd_path, 'rb') as f:
-            f.seek(header_end)
-            data = np.frombuffer(f.read(n_points * 16), dtype=np.float32)
-            points = data.reshape(n_points, 4)
-    
     xyz = points[:, :3]
     intensity = points[:, 3]
     
-    # 计算统计量
-    dist_from_origin = np.linalg.norm(xyz, axis=1)
-    
+    finite_xyz = xyz[np.isfinite(xyz).all(axis=1)]
+    finite_intensity = intensity[np.isfinite(intensity)]
+    distances = np.linalg.norm(finite_xyz, axis=1)
+    def bounds(values):
+        return (float(values.min()), float(values.max())) if len(values) else (float('nan'), float('nan'))
+    def mean(values):
+        return float(values.mean()) if len(values) else float('nan')
     stats = {
         'n_points': n_points,
-        'x_range': (xyz[:, 0].min(), xyz[:, 0].max()),
-        'y_range': (xyz[:, 1].min(), xyz[:, 1].max()),
-        'z_range': (xyz[:, 2].min(), xyz[:, 2].max()),
-        'dist_range': (dist_from_origin.min(), dist_from_origin.max()),
-        'dist_mean': dist_from_origin.mean(),
-        'intensity_range': (intensity.min(), intensity.max()),
-        'intensity_mean': intensity.mean(),
-        'nan_count': np.isnan(xyz).sum(),
-        'inf_count': np.isinf(xyz).sum(),
-        'z_mean': xyz[:, 2].mean(),
+        'finite_points': len(finite_xyz),
+        'x_range': bounds(finite_xyz[:, 0]),
+        'y_range': bounds(finite_xyz[:, 1]),
+        'z_range': bounds(finite_xyz[:, 2]),
+        'dist_range': bounds(distances),
+        'dist_mean': mean(distances),
+        'intensity_range': bounds(finite_intensity),
+        'intensity_mean': mean(finite_intensity),
+        'nan_count': np.isnan(xyz).any(axis=1).sum(),
+        'inf_count': np.isinf(xyz).any(axis=1).sum(),
+        'z_mean': mean(finite_xyz[:, 2]),
     }
-    
+
     # 检测异常
     anomalies = []
     if stats['nan_count'] > 0:
@@ -107,7 +81,7 @@ def extract_timestamp_from_filename(filename):
     return None, None
 
 
-def analyze_timestamps(pcd_dir):
+def analyze_timestamps(pcd_dir, expected_hz=5.0):
     """
     分析时间戳的合理性
     
@@ -145,7 +119,9 @@ def analyze_timestamps(pcd_dir):
     intervals_ms = intervals_sec * 1000  # 转换为毫秒
     
     # 期望帧率 (5 Hz)
-    expected_interval_ms = 1000 / 5.0  # 200 ms
+    if expected_hz <= 0:
+        raise ValueError("expected_hz must be positive")
+    expected_interval_ms = 1000 / expected_hz
     
     # 统计分析
     analysis = {
@@ -160,11 +136,11 @@ def analyze_timestamps(pcd_dir):
         'median_interval_ms': np.median(intervals_ms),
         
         # 计算实际帧率
-        'actual_framerate_hz': 1000.0 / np.mean(intervals_ms),
-        'expected_framerate_hz': 5.0,
+        'actual_framerate_hz': 1000.0 / np.mean(intervals_ms) if np.mean(intervals_ms) > 0 else float('nan'),
+        'expected_framerate_hz': expected_hz,
         
         # 偏差分析
-        'interval_deviation_pct': np.std(intervals_ms) / np.mean(intervals_ms) * 100,
+        'interval_deviation_pct': np.std(intervals_ms) / np.mean(intervals_ms) * 100 if np.mean(intervals_ms) > 0 else float('nan'),
         
         # 时间戳质量
         'has_backward_time': np.any(intervals_sec < 0),
@@ -182,164 +158,42 @@ def analyze_timestamps(pcd_dir):
 
 
 def report_timestamp_analysis(analysis):
-    """生成时间戳分析报告"""
-    
-    print("\n" + "=" * 80)
-    print("⏱️  时间戳合理性分析")
-    print("=" * 80)
-    
-    print(f"\n📊 基本信息")
-    print(f"  总帧数:           {analysis['num_frames']} 帧")
-    print(f"  总时长:           {analysis['total_duration_sec']:.2f} 秒")
-    print(f"  预期帧率:         5.0 Hz (200 ms/frame)")
-    print(f"  实际帧率:         {analysis['actual_framerate_hz']:.2f} Hz")
-    
-    print(f"\n⏲️  帧间隔统计 (单位: ms)")
-    print(f"  平均间隔:         {analysis['mean_interval_ms']:.2f} ms")
-    print(f"  标准差:           {analysis['std_interval_ms']:.2f} ms")
-    print(f"  中位数:           {analysis['median_interval_ms']:.2f} ms")
-    print(f"  最小间隔:         {analysis['min_interval_ms']:.2f} ms")
-    print(f"  最大间隔:         {analysis['max_interval_ms']:.2f} ms")
-    print(f"  间隔偏差:         {analysis['interval_deviation_pct']:.1f}%")
-    
-    # 动态异常阈值：相对平均间隔的 ±40%
-    mean_ms = analysis['mean_interval_ms']
-    threshold_high = mean_ms * 1.4
-    threshold_low  = mean_ms * 0.6
-
-    bad_intervals = [
-        (i, iv)
-        for i, iv in enumerate(analysis['intervals_ms'])
-        if iv > threshold_high or iv < threshold_low
-    ]
-
-    print(f"\n⚠️  异常检测")
-    print(f"  时间倒序:         {'❌ 有' if analysis['has_backward_time'] else '✓ 无'}")
-    print(f"  最大时间跳变:     {analysis['max_time_jump_ms']:.2f} ms")
-    print(f"  大时间跳变 (>300ms): {analysis['num_large_jumps']} 次")
-    print(f"  小间隔 (<100ms):  {analysis['num_small_intervals']} 次")
-    print(f"  异常间隔 (偏离均值±40%,  阈值 [{threshold_low:.1f}, {threshold_high:.1f}] ms): {len(bad_intervals)} 次")
-
-    if bad_intervals:
-        print(f"\n🔍 异常间隔明细:")
-        print(f"  {'Frame A':>8}  {'Frame B':>8}  {'间隔(ms)':>10}  {'偏差':>8}  时间 A → 时间 B")
-        print(f"  {'-'*8}  {'-'*8}  {'-'*10}  {'-'*8}  {'-'*35}")
-        for idx, iv_ms in bad_intervals:
-            fa = analysis['frame_nums'][idx]
-            fb = analysis['frame_nums'][idx + 1]
-            ts_a = analysis['timestamps'][idx]
-            ts_b = analysis['timestamps'][idx + 1]
-            deviation_pct = (iv_ms - mean_ms) / mean_ms * 100
-            sign = '+' if deviation_pct >= 0 else ''
-            time_a = datetime.utcfromtimestamp(ts_a).strftime('%H:%M:%S.%f')[:-3]
-            time_b = datetime.utcfromtimestamp(ts_b).strftime('%H:%M:%S.%f')[:-3]
-            label = '⬆ 大' if iv_ms > threshold_high else '⬇ 小'
-            print(f"  {fa:>8}  {fb:>8}  {iv_ms:>10.2f}  {sign}{deviation_pct:>6.1f}%  {label}  {time_a} → {time_b}")
-
-    # 帧率稳定性评估
-    print(f"\n🎯 稳定性评估")
-    framerate_error = abs(analysis['actual_framerate_hz'] - 5.0) / 5.0 * 100
-    deviation = analysis['interval_deviation_pct']
-    
-    if deviation < 5:
-        stability = "✅ 极好 (偏差 < 5%)"
-    elif deviation < 10:
-        stability = "🟢 很好 (偏差 < 10%)"
-    elif deviation < 20:
-        stability = "🟡 中等 (偏差 < 20%)"
-    else:
-        stability = "🔴 较差 (偏差 > 20%)"
-    
-    print(f"  帧率稳定性:       {stability}")
-    print(f"  帧率误差:         {framerate_error:.1f}% (目标 5 Hz, 实际 {analysis['actual_framerate_hz']:.2f} Hz)")
-    
-    # 详细异常分析
-    if analysis['num_large_jumps'] > 0:
-        print(f"\n🔍 大时间跳变详情 (>300 ms):")
-        for i, interval_ms in enumerate(analysis['intervals_ms']):
-            if interval_ms > 300:
-                frame_a = analysis['frame_nums'][i]
-                frame_b = analysis['frame_nums'][i + 1]
-                ts_a = analysis['timestamps'][i]
-                ts_b = analysis['timestamps'][i + 1]
-                print(f"  Frame {frame_a} → {frame_b}: {interval_ms:.2f} ms 跳变")
-                print(f"    时间: {datetime.utcfromtimestamp(ts_a).strftime('%H:%M:%S.%f')} → "
-                      f"{datetime.utcfromtimestamp(ts_b).strftime('%H:%M:%S.%f')}")
-    
-    if analysis['num_small_intervals'] > 0:
-        print(f"\n🔍 异常小间隔详情 (<100 ms):")
-        for i, interval_ms in enumerate(analysis['intervals_ms']):
-            if interval_ms < 100:
-                frame_a = analysis['frame_nums'][i]
-                frame_b = analysis['frame_nums'][i + 1]
-                print(f"  Frame {frame_a} → {frame_b}: {interval_ms:.2f} ms (可能数据包丢失重传)")
-    
-    # 健康度打分
-    print(f"\n📈 综合健康度")
-    score = 100
-    if deviation > 20:
-        score -= 30
-    elif deviation > 10:
-        score -= 15
-    
-    if analysis['num_large_jumps'] > 0:
-        score -= min(20, analysis['num_large_jumps'] * 5)
-    
-    if analysis['has_backward_time']:
-        score -= 40
-    
-    score = max(0, score)
-    
-    if score >= 90:
-        grade = "🟢 优秀"
-    elif score >= 75:
-        grade = "🟡 良好"
-    elif score >= 60:
-        grade = "🟠 一般"
-    else:
-        grade = "🔴 需要检查"
-    
-    print(f"  综合评分:         {score}/100 - {grade}")
-    
-    # 建议
-    print(f"\n💡 建议:")
-    if deviation > 10:
-        print(f"  • 帧率波动较大，可能是:")
-        print(f"    - 网络延迟或数据包丢失 (表现为大的时间跳变)")
-        print(f"    - 处理延迟 (MCAP 写入速度不稳定)")
-        print(f"    - 硬件时钟漂移 (需要时间同步)")
-    
-    if analysis['num_large_jumps'] > 0:
-        print(f"  • 检测到 {analysis['num_large_jumps']} 次大时间跳变")
-        print(f"    - 可能的数据包丢失或重传")
-        print(f"    - 建议检查网络连接状况")
-    
-    if analysis['num_small_intervals'] > 0:
-        print(f"  • 检测到 {analysis['num_small_intervals']} 次异常小间隔")
-        print(f"    - 可能是点云数据包分片处理的误差")
-        print(f"    - 或处理器缓冲区刷新不均匀")
+    """Filename timestamps describe frame spacing, not point-boundary continuity."""
+    print('\nFrame timestamp statistics (from filenames):')
+    for key in ['num_frames', 'total_duration_sec', 'expected_framerate_hz',
+                'actual_framerate_hz', 'mean_interval_ms', 'std_interval_ms',
+                'min_interval_ms', 'max_interval_ms', 'has_backward_time',
+                'num_large_jumps', 'num_small_intervals']:
+        print(f'  {key}: {analysis[key]}')
+    print('Large/small intervals mean >1.5x/<0.5x the requested nominal period.')
+    print('These statistics do not identify packet loss, clock faults or hardware health.')
+    print('Use timestamp extraction for next-frame first-point < previous-frame last-point checks.')
 
 
 def main():
     parser = argparse.ArgumentParser(description="Analyze PCD frame quality and timestamp stability")
     parser.add_argument("pcd_dir", nargs="?", default="pcd_output", help="PCD output directory")
+    parser.add_argument("--expected-hz", type=float, default=5.0)
     args = parser.parse_args()
+    if args.expected_hz <= 0:
+        parser.error("--expected-hz must be positive")
     pcd_dir = args.pcd_dir
     
     if not os.path.exists(pcd_dir):
         print(f"❌ 目录不存在: {pcd_dir}")
-        return
+        raise SystemExit(1)
     
     files = sorted(glob.glob(os.path.join(pcd_dir, '*.pcd')))
     if not files:
         print(f"❌ 没有找到 .pcd 文件")
-        return
+        raise SystemExit(1)
     
     print(f"📊 分析 {len(files)} 帧点云数据\n")
     
     all_stats = []
-    for pcd_path in files:
-        frame_idx = int(Path(pcd_path).stem.split('_')[1])
+    for index, pcd_path in enumerate(files):
+        parsed_index, _ = extract_timestamp_from_filename(Path(pcd_path).name)
+        frame_idx = parsed_index if parsed_index is not None else index
         stats = analyze_frame(pcd_path)
         if stats is None:
             continue
@@ -360,6 +214,8 @@ def main():
     print("📈 点云数据整体统计")
     print("=" * 80)
     
+    if not all_stats:
+        raise SystemExit('No non-empty PCD frames')
     point_counts = [s[1]['n_points'] for s in all_stats]
     z_means = [s[1]['z_mean'] for s in all_stats]
     dist_means = [s[1]['dist_mean'] for s in all_stats]
@@ -379,19 +235,15 @@ def main():
         if len(anomaly_frames) > 10:
             print(f"   ... 还有 {len(anomaly_frames) - 10} 帧异常")
     else:
-        print("\n✓ 所有帧数据正常，无异常检测")
+        print("\n✓ 本次启发式检查未检出异常（不等于硬件健康证明）")
     
     # 时间戳分析
-    ts_analysis = analyze_timestamps(pcd_dir)
+    ts_analysis = analyze_timestamps(pcd_dir, args.expected_hz)
     if ts_analysis:
         report_timestamp_analysis(ts_analysis)
     
-    print("\n💡 数据质量建议:")
-    print("  1. 高度波动较大 (Z-std > 0.5m)：可能是地面不平或扫描范围变化")
-    print("  2. 强度低 (mean < 30)：可能是物体反光性差或距离远")
-    print("  3. 点数波动大：可能是分辨率动态调整（60° vs 120°）")
-    print("  4. 距离分布异常：检查是否有阴影或障碍物")
-    print("  5. 帧率波动大 (>10%)：检查网络连接或处理器性能")
+    print('Non-finite placeholders may represent invalid returns; scene-dependent thresholds are descriptive only.')
+
 
 
 if __name__ == '__main__':

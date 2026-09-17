@@ -1,17 +1,5 @@
-# Common data tooling
-numpy>=1.21
-pandas>=1.3
-matplotlib>=3.4
-scipy>=1.7
-seaborn>=0.11
+# Run from the repository root. Installs the shared readers and analysis tools.
+-e .[analysis,device,infrared]
 
-# MCAP and ROS bag parsing
-mcap>=0.5
-rosbags>=0.10
-
-# Optional visualization and device interfaces
-open3d>=0.13
-opencv-python>=4.5
-pyserial>=3.5
-pyyaml>=6.0
-scikit-learn>=1.0
+# Optional interactive point-cloud viewer: pip install open3d
+# Linux BLE peripheral mode additionally requires OS-provided dbus-python/PyGObject.

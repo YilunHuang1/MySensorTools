@@ -43,6 +43,18 @@ class SmokeTestReport:
             counts[r.status] += 1
         return counts
 
+    @property
+    def overall(self):
+        if self.summary[CheckStatus.FAIL]:
+            return "FAIL"
+        if not self.results or self.summary[CheckStatus.WARN] or self.summary[CheckStatus.SKIP]:
+            return "INCOMPLETE"
+        return "PASS"
+
+    @property
+    def exit_code(self):
+        return {"PASS": 0, "FAIL": 1, "INCOMPLETE": 2}[self.overall]
+
     def print_report(self):
         ts = self.timestamp or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         w = 56
@@ -82,7 +94,7 @@ class SmokeTestReport:
         if s[CheckStatus.SKIP]:
             parts.append(f"{s[CheckStatus.SKIP]} SKIP")
         print(f"  总结: {', '.join(parts)}")
-        overall = "PASS" if s[CheckStatus.FAIL] == 0 else "FAIL"
+        overall = self.overall
         print(f"  整体结果: {overall}")
         print("=" * w)
         print()
@@ -95,6 +107,7 @@ class SmokeTestReport:
 
         report_dict = {
             "mode": self.mode,
+            "overall": self.overall,
             "timestamp": self.timestamp,
             "anchor_version": self.anchor_version,
             "tag_version": self.tag_version,

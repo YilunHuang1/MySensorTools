@@ -4,33 +4,28 @@
 
 ---
 
-## 你现在这个仓库的最短上传步骤（照抄即可）
+## 上传前核对
 
-在仓库目录下执行（你现在在 `MySensorTools/`）：
-
-```bash
-# 1) 看看当前有哪些改动
-git status
-
-# 2) 选择要纳入版本管理（track）的文件/目录
-#    你目前是 3 个未跟踪项（untracked）：
-git add imu/imu_reg_tools infrared/ir_qr_bench infrared/raw_tools/README.md
-
-# 3) 再确认一次：哪些将要提交
-git status
-
-# 4) 生成一次提交（commit）。-m 后面写这次改动的目的（不是流水账）
-git commit -m "Add IMU register tools and IR QR bench docs"
-
-# 5) 推到远端主分支（origin/main）
-git push origin main
-```
-
-如果第 5 步报错提示需要设置 upstream，也可以用：
+本仓库的远端主分支是 `main`；迁移期间使用功能分支，先完成验证和差异审查。
+不要使用旧任务中的文件清单，也不要把整个工作目录无差别加入暂存区。
 
 ```bash
-git push -u origin main
+git status --short
+git diff --check
+git diff
+# 明确选择本次修改的源文件、测试和文档
+git add <reviewed-files>
+git diff --cached --stat
+git diff --cached
+git commit -m "Describe the verified change"
+# 查看当前分支与远端，再按已确认的发布目标推送
+git branch --show-current
+git remote -v
 ```
+
+禁止提交 `.validation/`、原始数据、设备配置、凭据及私人日志。
+`lidar/realtime_check/Untitled` 是既有本地便签，不属于迁移交付。
+主分支同步采用正常快进提交；不要为同步而 reset 或 force push。
 
 ---
 

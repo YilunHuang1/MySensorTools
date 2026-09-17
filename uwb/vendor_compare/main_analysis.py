@@ -122,6 +122,9 @@ class UWBAnalysisManager:
         
         print(f"  ✅ 数据加载完成: 飞睿 {feirui_count} 组, 全迹 {quanji_count} 组")
         
+        if not feirui_count or not quanji_count:
+            raise ValueError('Vendor comparison requires non-empty data for both vendors')
+
         # 新增：数据字段一致性验证（含动态测试自动发现）
         validation_results = self.analyzer.validate_loaded_data()
         self.results['metadata']['validation'] = validation_results

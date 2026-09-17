@@ -5,16 +5,15 @@ description: Debug Vita robot infrared camera issues using vita-robot code-groun
 
 # Infrared Debug
 
-Use this skill for infrared camera issues. Verify the current worktree first because this module has recently carried local edits and may contain unresolved conflict markers.
+Read [the Aorta contract](../AORTA.md) before these sensor-specific checks.
+
+Use this skill for infrared camera issues. Verify pinned master source and deployed configuration separately.
 
 ## Workflow
 
-1. Check the worktree/module state before analysis:
-   ```bash
-   rg -n '<<<<<<<|=======|>>>>>>>' src/middleware/sensor/infrared
-   ```
+1. Record source revision and deployed service/configuration; do not treat historical worktree conflicts as current faults.
 2. Read [references/code-map.md](references/code-map.md) for current topic/config/code paths.
-3. Separate the symptom into capture/pipeline, ROS publication, H265 encode, ISP/AE metadata, IR fill light, or downstream QR/charging usage.
+3. Separate the symptom into capture/pipeline, Aorta publication, H265 encode, ISP/AE metadata, IR fill light, or downstream QR/charging usage.
 4. Check live/bag evidence for `/infrared_camera/image_raw` first; then check `/infrared_camera/video_h265` only if H265 is enabled in config.
 5. For lighting/lux behavior, verify whether the checked code has IR-light logic compiled cleanly before interpreting logs.
 6. Report verified facts and call out any blocked conclusions caused by dirty/conflicted code.
@@ -22,25 +21,18 @@ Use this skill for infrared camera issues. Verify the current worktree first bec
 ## Live Checks
 
 ```bash
-ros2 topic list | grep -Ei 'infrared|ir|qr'
-ros2 topic hz /infrared_camera/image_raw
-ros2 topic echo /infrared_camera/image_raw --once --no-arr
-ros2 topic hz /infrared_camera/video_h265
-grep -RniE 'infrared|SC202CS|H265|ISP|lux|AE|fault|PERCEPTION_INFRARED' /log/usr/archive
+python infrared/ir_qr_bench/ir_qr_bench.py --duration 5 --image-save-dir /tmp/ir_check
 ```
 
-Focused recording:
-
-```bash
-ros2 bag record -s mcap /infrared_camera/image_raw /infrared_camera/video_h265
-```
+A bounded sample with no frames is incomplete. Check the deployed camera service,
+pipeline enable conditions and current context before deciding the camera failed.
+Do not enable IR lighting or change GPIO merely to obtain a passing report.
 
 ## Interpretation Rules
 
 - `/infrared_camera/image_raw` is the primary raw image evidence. Do not debug H265 first unless raw frames are already healthy.
-- The checked config has `codec_config.enable_h265: false`; if unchanged on the robot, absence of `/infrared_camera/video_h265` is expected.
+- Verify deployed `codec_config.enable_h265`; disabled H265 makes absence of its video topic expected.
 - `infrared_camera_task.cpp` reports `PERCEPTION_INFRARED_CAMERA_MAIN_CONNECTION_LOST` when pipeline init fails.
-- The current checked tree contains conflict markers in infrared config/task files; resolve or account for that before treating IR-light behavior as implemented.
 - Replacing ISP `.so` can be a runtime deployment issue or a build/package issue; inspect `BUILD.bazel`, installed files, and service restart behavior before deciding.
 
 ## Output

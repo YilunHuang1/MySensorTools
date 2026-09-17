@@ -6,15 +6,21 @@ import re
 HEADER_SIZE = 32
 
 
-def parse_eeprom_data(raw_hex_str):
+def parse_eeprom_data(raw_hex_str, sn_offset=395):
     """Parse SC230AI stereo EEPROM bytes from i2ctransfer-style hex output."""
-    hex_tokens = re.findall(r"0x[0-9a-fA-F]{2}", raw_hex_str)
-    if hex_tokens:
-        clean_hex = "".join(token[2:] for token in hex_tokens)
+    text = raw_hex_str.strip()
+    if '0x' in text.lower():
+        tokens = text.replace(',', ' ').split()
+        if not tokens or any(not re.fullmatch(r'0[xX][0-9a-fA-F]{2}', token) for token in tokens):
+            raise ValueError('expected complete 0xXX byte tokens, without extra text')
+        clean_hex = ''.join(token[2:] for token in tokens)
     else:
-        clean_hex = "".join(raw_hex_str.split()).replace("0x", "")
-
+        clean_hex = ''.join(text.split())
     hex_bytes = bytes.fromhex(clean_hex)
+    if len(hex_bytes) < HEADER_SIZE + 1:
+        raise ValueError(f'truncated EEPROM header: {len(hex_bytes)} bytes, need {HEADER_SIZE + 1}')
+    if sn_offset < 0:
+        raise ValueError('SN offset must be non-negative')
     result = {}
     total_len = len(hex_bytes)
 
@@ -40,12 +46,13 @@ def parse_eeprom_data(raw_hex_str):
 
     # Some samples place SN at offset 395; older dumps are less stable, so fall back
     # to the longest printable run. This keeps the parser usable across revisions.
-    sn_fixed = read_slice(395, 32)
+    sn_fixed = read_slice(sn_offset, 32)
     fixed_score = sum(1 for byte in sn_fixed if printable(byte))
     use_fixed = len(sn_fixed) >= 8 and fixed_score >= max(8, len(sn_fixed) // 2)
 
     if use_fixed:
         sn_bytes = sn_fixed
+        result["sn_source"] = f"candidate_at_offset_{sn_offset}"
     else:
         best_start = -1
         best_len = 0
@@ -68,10 +75,11 @@ def parse_eeprom_data(raw_hex_str):
             best_start = start
             best_len = length
         sn_bytes = hex_bytes[best_start:best_start + best_len] if best_len >= 8 else b""
+        result["sn_source"] = "heuristic_printable_run" if sn_bytes else "not_found"
 
     result["sn"] = sn_bytes[:32]
     sn_str = "".join(chr(byte) if printable(byte) else "" for byte in sn_bytes).strip()
-    print(f"[3] serial number ({len(sn_bytes)} bytes):")
+    print(f"[3] serial number candidate ({len(sn_bytes)} bytes; {result['sn_source']}; unverified layout):")
     print(f"    raw: {binascii.hexlify(sn_bytes[:32], sep=' ').decode().upper()}")
     print(f"    ascii: '{sn_str}'")
 
@@ -83,15 +91,16 @@ def main():
     parser.add_argument("-f", "--file", help="Text file containing 0xXX hex bytes")
     parser.add_argument("--hex", dest="hex_string", help="Inline EEPROM hex string")
     parser.add_argument("--interactive", action="store_true", help="Read hex strings interactively")
+    parser.add_argument("--sn-offset", type=int, default=395, help="candidate SN offset; requires matching vendor layout")
     args = parser.parse_args()
 
     if args.file:
         with open(args.file, "r", encoding="utf-8") as f:
-            parse_eeprom_data(f.read())
+            parse_eeprom_data(f.read(), args.sn_offset)
         return
 
     if args.hex_string:
-        parse_eeprom_data(args.hex_string)
+        parse_eeprom_data(args.hex_string, args.sn_offset)
         return
 
     if not args.interactive:
@@ -102,8 +111,11 @@ def main():
         if user_input.lower() == "exit":
             break
         if user_input:
-            parse_eeprom_data(user_input)
+            parse_eeprom_data(user_input, args.sn_offset)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except (OSError, ValueError) as error:
+        raise SystemExit(f"error: {error}")

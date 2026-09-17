@@ -3,11 +3,26 @@ import numpy as np
 import os
 import re
 import argparse
+from pathlib import Path
+from sensor_tools.images import save_image
+from sensor_tools.calibration import cameras, load
 
 def parse_calibration_file(file_path):
     """
     解析标定文件，返回由相机名称索引的参数字典。
     """
+    if Path(file_path).suffix.lower() in ('.yaml', '.yml'):
+        parsed = cameras(load(file_path))
+        result = {'common': {}, 'cams': {}}
+        for label, camera in parsed.items():
+            if camera['model'] != 'radial_tangential':
+                raise ValueError(f"{label}: expected {'radial_tangential'}, got {camera['model']}")
+            K, D = camera['K'], camera['D']
+            names = ['k1', 'k2', 'p1', 'p2', 'k3', 'k4', 'k5', 'k6']
+            values = dict(zip(names, D))
+            values.update(fx=K[0,0], fy=K[1,1], cx=K[0,2], cy=K[1,2], imageWidth=camera['width'], imageHeight=camera['height'])
+            result['cams'][label] = values
+        return result
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"找不到文件: {file_path}")
 
@@ -58,12 +73,10 @@ def visualize_distortion(cam_name, cam_params, common_params, output_dir="."):
     根据解析的参数生成畸变可视化图
     """
     # 1. 获取基础分辨率
-    try:
-        W = int(common_params.get('imageWidth', 1920))
-        H = int(common_params.get('imageHeight', 1080))
-    except:
-        print("警告：未找到分辨率，默认使用 1920x1080")
-        W, H = 1920, 1080
+    W = int(cam_params.get('imageWidth', common_params.get('imageWidth', 0)))
+    H = int(cam_params.get('imageHeight', common_params.get('imageHeight', 0)))
+    if W <= 0 or H <= 0:
+        raise ValueError('calibration must contain explicit image dimensions')
 
     # 2. 构建内参矩阵 K
     try:
@@ -75,8 +88,7 @@ def visualize_distortion(cam_name, cam_params, common_params, output_dir="."):
                       [0, fy, cy],
                       [0, 0, 1]], dtype=np.float64)
     except KeyError as e:
-        print(f"错误：{cam_name} 缺少必要内参 {e}")
-        return
+        raise ValueError(f"{cam_name}: missing intrinsic {e}") from e
 
     # 3. 构建畸变系数向量 D (OpenCV 8参数 Rational Model)
     # 顺序: k1, k2, p1, p2, k3, k4, k5, k6
@@ -111,7 +123,7 @@ def visualize_distortion(cam_name, cam_params, common_params, output_dir="."):
 
     # 7. 保存结果
     save_path = os.path.join(output_dir, f"{cam_name}_Distortion_Ring.png")
-    cv2.imwrite(save_path, dst_img)
+    save_image(save_path, dst_img)
     print(f"  -> 结果已保存: {save_path}\n")
 
 def main():
@@ -122,8 +134,7 @@ def main():
 
     # 简单的文件存在性检查
     if not os.path.exists(args.input_file):
-        print(f"Error: 找不到文件 '{args.input_file}'")
-        return
+        parser.exit(1, f"File not found: {args.input_file}\n")
     os.makedirs(args.output_dir, exist_ok=True)
 
     try:
@@ -132,8 +143,7 @@ def main():
         
         # 2. 遍历所有找到的相机进行可视化
         if not data['cams']:
-            print("未在文件中找到以 'CAM' 开头的相机参数。")
-            return
+            raise ValueError("no camera parameters found")
 
         for cam_name, cam_params in data['cams'].items():
             visualize_distortion(cam_name, cam_params, data['common'], args.output_dir)
@@ -141,9 +151,7 @@ def main():
         print("所有处理完成。")
 
     except Exception as e:
-        print(f"发生错误: {e}")
-        import traceback
-        traceback.print_exc()
+        parser.exit(1, f"error: {e}\n")
 
 if __name__ == "__main__":
     main()

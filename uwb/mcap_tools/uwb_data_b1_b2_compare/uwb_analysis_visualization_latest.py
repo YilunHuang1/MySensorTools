@@ -9,7 +9,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 from pathlib import Path
-import glob
+import argparse
+import sys
 import warnings
 from matplotlib import animation
 warnings.filterwarnings('ignore')
@@ -18,44 +19,32 @@ warnings.filterwarnings('ignore')
 plt.rcParams['font.sans-serif'] = ['SimHei', 'Arial Unicode MS', 'DejaVu Sans']
 plt.rcParams['axes.unicode_minus'] = False
 
-def load_all_datasets():
-    """加载所有解析后的CSV数据集"""
+def load_all_datasets(root: Path):
+    """Load corrected CSVs without guessing firmware from measurement angles."""
     datasets = {}
-    
-    # 查找所有_corrected.csv文件
-    csv_files = (
-        glob.glob("uwb_b1_07/**/*_corrected.csv", recursive=True)
-        + glob.glob("uwb_b2_62/**/*_corrected.csv", recursive=True)
-        + glob.glob("uwb_b2_62_round2/**/*_corrected.csv", recursive=True)
-    )
-    
-    print(f"找到 {len(csv_files)} 个数据文件:")
-    
-    for csv_file in csv_files:
-        try:
-            df = pd.read_csv(csv_file)
-            
-            # 从文件路径提取数据集名称
-            path_parts = Path(csv_file).parts
-            dataset_name = path_parts[-2] if len(path_parts) > 1 else Path(csv_file).stem
-            # 版本识别：b1->007；b2->062（包含 round2）
-            version = '007' if 'uwb_b1_07' in csv_file else ('062' if 'uwb_b2_62' in csv_file else 'unknown')
-            df.attrs['version'] = version
-            # 子系列标记：用于区分 062 的 round2 数据，便于后续扩展
-            series = 'round2' if 'uwb_b2_62_round2' in csv_file else 'base'
-            df.attrs['series'] = series
-            
-            # 数据质量检查
-            valid_distance = df['distance'].between(0, 50).sum()
-            valid_angle = df['angle'].between(0, 360).sum()
-            
-            print(f"  [{version}][{series}] {dataset_name}: {len(df)} 条记录, 有效距离: {valid_distance}/{len(df)}, 有效角度(0-360°): {valid_angle}/{len(df)}")
-            
-            datasets[dataset_name] = df
-            
-        except Exception as e:
-            print(f"  ❌ 加载失败 {csv_file}: {e}")
-    
+    paths = [root] if root.is_file() else sorted(root.rglob('*_corrected.csv'))
+    if not paths:
+        raise ValueError(f'No corrected CSVs found in {root}')
+    required = ['distance', 'angle', 'distance_filtered', 'angle_filtered',
+                'raw_x_m', 'raw_y_m', 'filtered_x_m', 'filtered_y_m']
+    for path in paths:
+        if b'\x00' in path.read_bytes():
+            raise ValueError(f'{path}: NUL bytes in CSV; repair the source explicitly')
+        df = pd.read_csv(path)
+        missing = set(required) - set(df.columns)
+        if df.empty or missing:
+            raise ValueError(f'{path}: empty dataset or missing columns {sorted(missing)}')
+        if not np.isfinite(df[required].to_numpy(dtype=float)).all():
+            raise ValueError(f'{path}: non-finite measurements')
+        dataset_name = str(path.relative_to(root) if root.is_dir() else path.name)
+        # Explicit historical directory labels only; unknown remains its own group.
+        version = '007' if 'uwb_b1_07' in str(path) else ('062' if 'uwb_b2_62' in str(path) else 'unknown')
+        df.attrs['version'] = version
+        df.attrs['series'] = 'round2' if 'uwb_b2_62_round2' in str(path) else 'base'
+        if 'message_count' not in df:
+            df['message_count'] = np.arange(len(df))
+        datasets[dataset_name] = df
+        print(f'[{version}] {dataset_name}: {len(df)} records')
     return datasets
 
 def create_comprehensive_analysis(datasets):
@@ -260,7 +249,7 @@ def create_polar_analysis(datasets):
     
     return fig
 
-def generate_analysis_report(datasets):
+def generate_analysis_report(datasets, output_dir=Path(".")):
     """生成详细的分析报告"""
     
     report = []
@@ -354,86 +343,42 @@ def generate_analysis_report(datasets):
     for name, stats in angle_stats.items():
         report.append(f"- {name}: {stats['mean']:.1f}° (±{stats['std']:.1f}), 范围: {stats['min']:.1f}-{stats['max']:.1f}°")
     
-    # 技术说明
-    report.append("")
-    report.append("## 技术说明")
-    report.append("")
-    report.append("**数据解析:**")
-    report.append("- 使用最新的mcap_to_csv_final_corrected.py脚本解析")
-    report.append("- 字段映射已与Foxgalvo可视化结果验证一致")
-    report.append("- 支持原始和滤波数据的完整解析")
-    report.append("")
-    
-    report.append("**坐标系统:**")
-    report.append("- 极坐标: (distance, angle)")
-    report.append("- 笛卡尔坐标: (x, y) = (distance*cos(angle), distance*sin(angle))")
-    report.append("- 角度单位: 度 (0-360°)")
-    report.append("- 距离单位: 米 (m)")
-    report.append("")
-    
-    report.append("**数据质量保证:**")
-    report.append("- 实时数据范围验证")
-    report.append("- 异常值检测和标记")
-    report.append("- 100%数据解析成功率")
-    report.append("")
-    
-    # 结论
-    report.append("## 结论")
-    report.append("")
-    report.append("✅ **数据解析成功**: 所有MCAP文件都已成功解析，数据结构与Foxgalvo一致")
-    report.append("✅ **数据质量优秀**: 距离和角度测量数据100%有效")
-    report.append("✅ **滤波效果良好**: 滤波算法有效减少了测量噪声")
-    report.append("✅ **多场景覆盖**: 包含静态、主动、近距离等多种测试场景")
-    report.append("")
-    
+    report.extend([
+        '## Interpretation',
+        'CSV ranges are descriptive checks, not ground-truth accuracy or device health.',
+        'Firmware groups come from explicit historical directory labels; otherwise unknown.',
+        'Angles are circular. Linear means/std above are descriptive only and may mislead near 0/360 degrees.',
+        'Filter differences alone do not establish noise reduction or accuracy.',
+    ])
+
     # 保存报告
-    report_text = "\\n".join(report)
+    report_text = "\n".join(report)
     
-    with open('uwb_analysis_report_latest.md', 'w', encoding='utf-8') as f:
+    with open(output_dir / 'uwb_analysis_report_latest.md', 'w', encoding='utf-8') as f:
         f.write(report_text)
     
     print("✅ 分析报告已保存: uwb_analysis_report_latest.md")
     
     return report_text
 
-def sanitize_nul_in_csvs(root_dir: Path):
-    """扫描并为包含NUL的 .mcap_corrected.csv 生成干净副本 (_clean.csv)。"""
-    try:
-        csv_paths = list(root_dir.rglob('*.mcap_corrected.csv'))
-        for p in csv_paths:
-            try:
-                data = p.read_bytes()
-                if b'\x00' in data:
-                    clean = data.replace(b'\x00', b'')
-                    clean_path = p.with_name(p.stem + '_clean.csv')
-                    clean_path.write_bytes(clean)
-                    print(f"  ✅ 生成干净CSV: {clean_path}")
-            except Exception as e:
-                print(f"  ⚠️ 清理失败: {p}: {e}")
-    except Exception:
-        pass
-
-
 def main():
     """主函数"""
     print("UWB数据可视化分析 - 最新版本")
     print("=" * 50)
 
-    # 先清理CSV中的NUL字节，生成可打开的_clean副本
-    sanitize_nul_in_csvs(Path('.'))
-    
-    # 加载数据集
-    datasets = load_all_datasets()
-    
-    if not datasets:
-        print("❌ 没有找到有效的数据集")
-        return
-    
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('input', type=Path, help='Corrected CSV or directory containing *_corrected.csv')
+    parser.add_argument('--output-dir', type=Path, required=True)
+    parser.add_argument('--animate', action='store_true', help='Also export trajectory GIFs')
+    args = parser.parse_args()
+    datasets = load_all_datasets(args.input.resolve())
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+
     print(f"\n✅ 成功加载 {len(datasets)} 个数据集")
     
     # 基于版本生成分文件图表
     print("\n正在生成版本化图表到 charts/007、charts/062 和 charts/062_round2 ...")
-    versions_map = {'007': {}, '062': {}}
+    versions_map = {'007': {}, '062': {}, 'unknown': {}}
     for name, df in datasets.items():
         ver = df.attrs.get('version', 'unknown')
         if ver in versions_map:
@@ -444,11 +389,12 @@ def main():
         if df.attrs.get('version') == '062' and df.attrs.get('series') == 'round2'
     }
     
-    base_dir = Path('charts')
+    base_dir = args.output_dir / 'charts'
     out_dirs = {
         '007': base_dir / '007',
         '062': base_dir / '062',
         '062_round2': base_dir / '062_round2',
+        'unknown': base_dir / 'unknown',
     }
     for d in out_dirs.values():
         d.mkdir(parents=True, exist_ok=True)
@@ -633,11 +579,11 @@ def main():
             ani.save(out_path, writer=writer)
         except Exception as e:
             # 回退失败：环境可能缺少 PillowWriter。请安装 pillow 或 imageio。
-            print(f"  ⚠️ GIF export failed: {out_path}. Install pillow or imageio. Error: {e}")
+            raise RuntimeError(f"GIF export failed: {out_path}: {e}") from e
         finally:
             plt.close(fig)
 
-    for ver in ['007', '062', '062_round2']:
+    for ver in ['007', '062', '062_round2', 'unknown']:
         dsets = versions_map.get(ver, {})
         out_dir = out_dirs[ver]
         if not dsets:
@@ -662,7 +608,8 @@ def main():
                 sub_dir / 'angle_time_series.png'
             )
             # 导出随时间变化的动态轨迹GIF
-            save_trajectory_animation(df, sub_dir / 'trajectory_animation.gif')
+            if args.animate:
+                save_trajectory_animation(df, sub_dir / 'trajectory_animation.gif')
         print(f"  ✅ 已生成版本 {ver} 的图表到: {out_dir}")
     
     # 生成跨版本对比图
@@ -724,7 +671,7 @@ def main():
     
     # 生成分析报告
     print("正在生成分析报告...")
-    generate_analysis_report(datasets)
+    generate_analysis_report(datasets, args.output_dir)
     
     print("\n🎉 所有分析完成！")
     print("\n生成的文件:")
@@ -748,7 +695,10 @@ def main():
     print(f"- 距离范围: {min(distance_ranges):.3f} - {max(distance_ranges):.3f} m")
     print(f"- 角度范围: {min(angle_ranges):.1f} - {max(angle_ranges):.1f}°")
     
-    print("\\n✅ 确认使用真实UWB测试数据，距离和角度范围合理，已用于分析")
+    print(f"Output: {args.output_dir.resolve()}")
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except (OSError, ValueError, KeyError) as error:
+        sys.exit(f"error: {error}")

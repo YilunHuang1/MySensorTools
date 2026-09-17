@@ -5,6 +5,8 @@ description: Entry skill for triaging Vita robot sensor problems before routing 
 
 # Vita Sensor Debug
 
+Current transport guidance: [Aorta](../AORTA.md).
+
 Use this as the first-pass dispatcher for Vita robot sensor incidents. Keep this skill focused on triage and routing; load the sensor-specific skill only after the failing subsystem is identified.
 
 ## Workflow

@@ -1,3 +1,9 @@
+> Aorta migration (2026-09-17): install the repository root package first with
+> `pip install -e '.[analysis,device,infrared]'`. Offline MCAP readers accept embedded
+> CDR/BFBS/JSON schemas; live tools use Aorta. Historical ROS commands, fixed paths,
+> sample versions and results below are archival context. Use each updated entry's
+> `--help` and `docs/TOOLS_GUIDE.md` for current commands and verification limits.
+
 # UWB 测距 - FPS 计算与日志说明
 
 ## 📊 FPS 计算逻辑

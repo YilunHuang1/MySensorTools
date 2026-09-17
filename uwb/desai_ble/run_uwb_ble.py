@@ -21,25 +21,15 @@ def crc16_xmodem(data):
     return crc
 
 def parse_c5(payload):
-    """解析 0xC5 AoA 数据包"""
+    from sensor_tools.uwb_serial import tlvs, ranging
     try:
-        offset = 2  # skip type+len
-        sync_cnt = struct.unpack_from('<I', payload, offset)[0]; offset += 4
-        mac_id   = struct.unpack_from('<I', payload, offset)[0]; offset += 4
-        fob_id   = struct.unpack_from('<I', payload, offset)[0]; offset += 4
-        fob_type = struct.unpack_from('<H', payload, offset)[0]; offset += 2
-        distance = struct.unpack_from('<f', payload, offset)[0]; offset += 4
-        angle    = struct.unpack_from('<f', payload, offset)[0]; offset += 4
-        pitch    = struct.unpack_from('<f', payload, offset)[0]; offset += 4
-        rssi_len = payload[offset]; offset += 1
-        rssi_vals = list(payload[offset:offset+rssi_len]); offset += rssi_len
-        rssi_rxp = struct.unpack_from('b', payload, offset)[0]; offset += 1
-        rssi_fpp = struct.unpack_from('b', payload, offset)[0]; offset += 1
-        confidence = payload[offset] if offset < len(payload) else -1
-        return dict(distance=distance, angle=angle, pitch=pitch,
-                    rssi_rxp=rssi_rxp, rssi_fpp=rssi_fpp,
-                    confidence=confidence, mac_id=mac_id)
-    except Exception as e:
+        entries = list(tlvs(payload))
+        if len(entries) != 1 or entries[0][0] != 0xC5:
+            return None
+        result = ranging(entries[0][1])
+        result['confidence'] = result['pos_confidence']
+        return result
+    except ValueError:
         return None
 
 def verify_data(d):
@@ -60,7 +50,7 @@ def verify_data(d):
     else:
         issues.append(f"✅ 俯仰角: {d['pitch']:.1f}°")
 
-    if d['confidence'] < 0:
+    if d['confidence'] is None:
         issues.append(f"⚠️  置信度字段缺失")
     elif d['confidence'] < 30:
         issues.append(f"❌ 置信度过低: {d['confidence']} (<30，信号差)")
@@ -69,7 +59,9 @@ def verify_data(d):
     else:
         issues.append(f"✅ 置信度: {d['confidence']}/100")
 
-    if d['rssi_rxp'] < -100:
+    if d['rssi_rxp'] is None:
+        issues.append('RSSI extension missing')
+    elif d['rssi_rxp'] < -100:
         issues.append(f"⚠️  信号强度弱: RxP={d['rssi_rxp']}dBm")
     else:
         issues.append(f"✅ 信号强度: RxP={d['rssi_rxp']}dBm, FPP={d['rssi_fpp']}dBm")
@@ -77,8 +69,16 @@ def verify_data(d):
     return issues
 
 def main():
-    s = serial.Serial(PORT, BAUDRATE, timeout=0.1)
-    print(f"✅ 串口 {PORT} 打开成功，开始监听 0xC5 数据包...")
+    import argparse
+    parser = argparse.ArgumentParser(description="Passive vendor serial stream diagnostics (requires an isolated serial device)")
+    parser.add_argument('--port', default=PORT)
+    parser.add_argument('--baudrate', type=int, default=BAUDRATE)
+    parser.add_argument('--duration', type=float, default=10)
+    args = parser.parse_args()
+    if args.duration <= 0:
+        parser.error('duration must be positive')
+    s = serial.Serial(args.port, args.baudrate, timeout=0.1, exclusive=True)
+    print(f"✅ 串口 {args.port} 打开成功，开始监听 0xC5 数据包...")
     print("=" * 60)
 
     buf = bytearray()
@@ -89,7 +89,7 @@ def main():
     fps_list = []
 
     try:
-        while True:
+        while time.time() - start_time < args.duration:
             data = s.read(1024)
             if data:
                 buf.extend(data)
@@ -112,56 +112,59 @@ def main():
                         continue
 
                     buf = buf[packet_len:]
-                    tlv = packet[5:]
-                    tlv_type = tlv[0]
+                    from sensor_tools.uwb_serial import packet_tlvs
+                    for tlv_type, value in packet_tlvs(packet):
+                        tlv = bytes([tlv_type, len(value)]) + value
+                        if tlv_type == 0xC5:
+                            frame_count += 1
+                            now = time.time()
+                            if last_frame_time:
+                                gap = now - last_frame_time
+                                fps_list.append(1.0 / gap if gap > 0 else 0)
+                            last_frame_time = now
+                            fps = (sum(fps_list[-20:]) / len(fps_list[-20:])) if fps_list else 0
 
-                    if tlv_type == 0xC5:
-                        frame_count += 1
-                        now = time.time()
-                        if last_frame_time:
-                            gap = now - last_frame_time
-                            fps_list.append(1.0 / gap if gap > 0 else 0)
-                        last_frame_time = now
-                        fps = (sum(fps_list[-20:]) / len(fps_list[-20:])) if fps_list else 0
+                            parsed = parse_c5(tlv)
+                            if parsed:
+                                print(f"\n──── 第 {frame_count} 帧 | FPS={fps:.1f} ────")
+                                for line in verify_data(parsed):
+                                    print(f"  {line}")
+                            else:
+                                print(f"❌ 第 {frame_count} 帧解析失败")
+                                error_count += 1
 
-                        parsed = parse_c5(tlv)
-                        if parsed:
-                            print(f"\n──── 第 {frame_count} 帧 | FPS={fps:.1f} ────")
-                            for line in verify_data(parsed):
-                                print(f"  {line}")
+                        elif tlv_type == 0x59:
+                            range_status = tlv[3] if len(tlv) > 3 else 0xFF
+                            status_str = "测距中✅" if range_status == 0x03 else f"状态={range_status:#x}"
+                            print(f"💓 心跳包 range_status={status_str}")
+
+                        elif tlv_type == 0xC7:
+                            code = tlv[2] if len(tlv) > 2 else 0xFF
+                            CODE_MAP = {
+                                0x00: "STATUS_OK",
+                                0x20: "TX_FAILED 发送失败",
+                                0x21: "RX_TIMEOUT 接收超时 ← 常见！Tag信号没收到",
+                                0x22: "RX_PHY_DEC_FAILED 解码错误",
+                                0x23: "RX_PHY_TOA_FAILED TOA失败",
+                                0x24: "RX_PHY_STS_FAILED ← STS密钥不匹配！",
+                                0x25: "RX_MAC_DEC_FAILED MAC CRC错误",
+                                0xE4: "BASEBAND_ERROR 基带错误",
+                                0xE8: "DISTANCE_FAIL 距离数据异常",
+                                0xE9: "ANGLE_FAIL 角度数据异常",
+                            }
+                            desc = CODE_MAP.get(code, f"未知状态码 {code:#x}")
+                            print(f"⚠️  错误状态 0xC7: {desc}")
+                            error_count += int(code != 0)
+
                         else:
-                            print(f"❌ 第 {frame_count} 帧解析失败")
-                            error_count += 1
+                            pass  # 忽略其他 TLV
 
-                    elif tlv_type == 0x59:
-                        range_status = tlv[3] if len(tlv) > 3 else 0xFF
-                        status_str = "测距中✅" if range_status == 0x03 else f"状态={range_status:#x}"
-                        print(f"💓 心跳包 range_status={status_str}")
-
-                    elif tlv_type == 0xC7:
-                        code = tlv[2] if len(tlv) > 2 else 0xFF
-                        CODE_MAP = {
-                            0x00: "STATUS_OK",
-                            0x20: "TX_FAILED 发送失败",
-                            0x21: "RX_TIMEOUT 接收超时 ← 常见！Tag信号没收到",
-                            0x22: "RX_PHY_DEC_FAILED 解码错误",
-                            0x23: "RX_PHY_TOA_FAILED TOA失败",
-                            0x24: "RX_PHY_STS_FAILED ← STS密钥不匹配！",
-                            0x25: "RX_MAC_DEC_FAILED MAC CRC错误",
-                            0xE4: "BASEBAND_ERROR 基带错误",
-                            0xE8: "DISTANCE_FAIL 距离数据异常",
-                            0xE9: "ANGLE_FAIL 角度数据异常",
-                        }
-                        desc = CODE_MAP.get(code, f"未知状态码 {code:#x}")
-                        print(f"⚠️  错误状态 0xC7: {desc}")
-                        error_count += 1
-
-                    else:
-                        pass  # 忽略其他 TLV
                 else:
                     buf = buf[1:]
 
     except KeyboardInterrupt:
+        pass
+    finally:
         elapsed = time.time() - start_time
         avg_fps = frame_count / elapsed if elapsed > 0 else 0
         print("\n" + "=" * 60)

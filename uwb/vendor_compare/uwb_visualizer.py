@@ -34,7 +34,7 @@ class UWBVisualizer:
             output_dir: 输出目录
         """
         self.output_dir = Path(output_dir)
-        self.output_dir.mkdir(exist_ok=True)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
         
         # 设置颜色方案
         self.colors = {
@@ -113,7 +113,7 @@ class UWBVisualizer:
                         labels.append(device)
                 
                 if data_to_plot:
-                    bp = ax.boxplot(data_to_plot, labels=labels, patch_artist=True)
+                    bp = ax.boxplot(data_to_plot, tick_labels=labels, patch_artist=True)
                     
                     # 设置颜色
                     for patch, label in zip(bp['boxes'], labels):
@@ -175,7 +175,7 @@ class UWBVisualizer:
                         labels.append(device)
                 
                 if data_to_plot:
-                    bp = ax.boxplot(data_to_plot, labels=labels, patch_artist=True)
+                    bp = ax.boxplot(data_to_plot, tick_labels=labels, patch_artist=True)
                     
                     for patch, label in zip(bp['boxes'], labels):
                         patch.set_facecolor(self.colors[label])

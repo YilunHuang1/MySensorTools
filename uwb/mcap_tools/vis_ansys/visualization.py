@@ -27,6 +27,11 @@ from matplotlib.widgets import Button
 def load_df(csv_path: Path) -> pd.DataFrame:
     """读取CSV为DataFrame。"""
     df = pd.read_csv(csv_path)
+    required = ["raw_x_m", "raw_y_m", "filtered_x_m", "filtered_y_m"]
+    if df.empty or any(column not in df for column in required):
+        raise ValueError("CSV must contain non-empty raw/filtered XY measurements")
+    if not np.isfinite(df[required].to_numpy(dtype=float)).all():
+        raise ValueError("Non-finite XY measurements")
     # 兼容字段名称
     for col in ["timestamp_sec", "raw_x_m", "raw_y_m", "filtered_x_m", "filtered_y_m", "z_m_est"]:
         if col not in df.columns:

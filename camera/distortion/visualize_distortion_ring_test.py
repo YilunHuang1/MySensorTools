@@ -97,38 +97,18 @@ CAM1_p = [-0.0000185161, 0.0001535738]
 
 # ================= 执行可视化 =================
 
-# 生成 CAM0
-mask0, grid0 = visualize_distortion_ring("CAM0", W, H, CAM0_fx, CAM0_fy, CAM0_cx, CAM0_cy, CAM0_k, CAM0_p)
-# 生成 CAM1
-mask1, grid1 = visualize_distortion_ring("CAM1", W, H, CAM1_fx, CAM1_fy, CAM1_cx, CAM1_cy, CAM1_k, CAM1_p)
+def main():
+    import argparse
+    from pathlib import Path
+    from sensor_tools.images import save_image
+    parser = argparse.ArgumentParser(description='Historical calibration demo; use visualize_distortion_ring.py for current files')
+    parser.add_argument('--output-dir', type=Path, default=Path('output/distortion_demo'))
+    args = parser.parse_args()
+    for name, fx, fy, cx, cy, k, p in [('CAM0', CAM0_fx, CAM0_fy, CAM0_cx, CAM0_cy, CAM0_k, CAM0_p), ('CAM1', CAM1_fx, CAM1_fy, CAM1_cx, CAM1_cy, CAM1_k, CAM1_p)]:
+        mask, grid = visualize_distortion_ring(name, W, H, fx, fy, cx, cy, k, p)
+        save_image(args.output_dir / (name + '_mask.png'), mask)
+        save_image(args.output_dir / (name + '_grid.png'), grid)
 
-# 显示结果
-plt.figure(figsize=(12, 8))
 
-plt.subplot(2, 2, 1)
-plt.title("CAM0 Distortion Shape (Mask)")
-plt.imshow(mask0, cmap='gray')
-plt.axis('off')
-
-plt.subplot(2, 2, 2)
-plt.title("CAM0 Undistorted Grid")
-plt.imshow(grid0)
-plt.axis('off')
-
-plt.subplot(2, 2, 3)
-plt.title("CAM1 Distortion Shape (Mask)")
-plt.imshow(mask1, cmap='gray')
-plt.axis('off')
-
-plt.subplot(2, 2, 4)
-plt.title("CAM1 Undistorted Grid")
-plt.imshow(grid1)
-plt.axis('off')
-
-plt.tight_layout()
-plt.show()
-
-# 如果需要保存图片给厂商看
-cv2.imwrite('CAM0_Distortion_Ring.png', mask0)
-cv2.imwrite('CAM0_Grid_Check.png', grid0)
-print("图片已保存至当前目录。")
+if __name__ == '__main__':
+    main()

@@ -30,7 +30,7 @@ Use this as a starting point only; verify against the current robot config and b
 
 ## UWB
 
-- `/uwb/data`
+- `uwb/ranging (legacy /uwb/data)`
 - `/uwb/state`
 - `/uwb/neighbors`
 - `/uwb/head_touch`

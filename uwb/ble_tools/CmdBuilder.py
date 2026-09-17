@@ -97,6 +97,8 @@ class CmdBuilder:
     @staticmethod
     def build_apple_fira_cmd(shared_configure_data_bytes)->bytes:
         global session_id
+        if len(shared_configure_data_bytes) < 29:
+            raise ValueError('Apple shared configuration must contain at least 29 bytes')
         apple = shared_configure_data_bytes[1:]
         session_id = apple[7:11]
         cmd = bytearray(43)
@@ -123,8 +125,8 @@ class CmdBuilder:
             cmd[38]    = 0x00           #multimode
             cmd[39:41] = [0x4c, 0x00]   #vendor id
             cmd[41:43] = [0x39, 0x1B]   # CRC
-        except e:
-            print(e)
+        except (IndexError, ValueError) as error:
+            raise ValueError("invalid Apple FiRa configuration") from error
         
         crc = crc16_xmodem(cmd[5:41])
         cmd[41:43] = [(crc >> 8) & 0xFF, crc & 0xFF]
@@ -133,8 +135,7 @@ class CmdBuilder:
     #Normal fira cmd 
     @staticmethod
     def build_fira_cmd(params)->bytes:
-        #@todo
-        return None
+        raise NotImplementedError("Generic FiRa configuration is not implemented; use the Apple shared-configuration path")
     
     @staticmethod
     def build_start_ranging_cmd(session_id)->bytes:

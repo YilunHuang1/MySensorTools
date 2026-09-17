@@ -1,41 +1,16 @@
-# LiDAR Code Map
+# lidar-debug source map
 
-## Current Verified Paths
+Baseline: remote master `291b58055b54a924735604f26b840ab1f22b5427` (2026-09-17).
+Paths below are relative to vita-robot. Read them at that revision with `git show`;
+recheck remote master and deployed revision before a new investigation.
 
-- `src/middleware/sensor/lidar/BUILD.bazel`
-  - Aliases the LiDAR node to `//src/third_party/sensors/vanjee_lidar/src/vanjee_lidar_sdk:vanjee_lidar_sdk_node`.
-  - Installs SDK config files, parameter files, and `time_sync/config/sync.yaml`.
-- `src/third_party/sensors/vanjee_lidar/src/vanjee_lidar_sdk`
-  - Third-party VanJee driver implementation and configuration.
-  - Inspect this tree for packet decoding, driver node startup, packet/pointcloud publishing, and model-specific params.
-- `src/middleware/sensor/lidar/time_sync/time_sync.cpp`
-  - Creates fault client `lidar_driver`.
-  - Reports `PERCEPTION_LIDAR_DRIVER_RTC_NOT_INCREASING`.
-- `src/middleware/sensor/lidar/time_sync/config/sync.yaml`
-  - Current checked config contains `serial_232: /dev/ttyS3` and `sleep_time: 0`.
-- `src/middleware/sensor/lidar/lidar_ota`
-  - LiDAR OTA wrapper. The OTA binary path in code is `/app/lidar/VanJeeLidar_arm64`.
-- `src/application/vita_slam/vs_cfg/slam/slam.yaml`
-  - LiDAR enabled with topic `/lidar_points`.
-  - LiDAR internal IMU topic is `/lidar_imu`.
-  - Point time unit is controlled by `ego.lio.timestamp_unit`; current checked value is `0` for seconds.
-- `src/application/vita_slam/vs_ros/slam_node.cpp`
-  - Subscribes to `sensor_cfg.lidar.topic` and `sensor_cfg.lidar.imu_topic`.
-  - Reports `LIDAR_DATA_ANOMALY` when converted cloud is null/empty/too small.
-  - Also consumes `/lidar_imu`; keep this distinct from primary `/imu_raw`.
-- `src/application/vln/traj_to_cmd_task.h`
-  - Uses `/lidar_points` for trajectory refinement/costmap paths.
-- `src/application/function_statemachine/guard/guard_node.cpp`
-  - Subscribes to configured LiDAR point cloud topic for guard/safety checks.
+- `src/third_party/sensors/vanjee_lidar/src/vanjee_lidar_sdk/src/source/source_packet_aorta.hpp` — Raw packet transport; messages can split hardware packets.
+- `src/third_party/sensors/vanjee_lidar/src/vanjee_lidar_sdk/src/source/source_pointcloud_aorta.hpp` — Point-cloud Aorta publication.
+- `src/third_party/sensors/vanjee_lidar/src/vanjee_lidar_sdk/src/source/foxglove_point_cloud_encoder.hpp` — Point-field offsets/types; do not assume ROS PointCloud2 layout.
+- `src/third_party/sensors/vanjee_lidar/src/vanjee_lidar_sdk/src/source/source_imu_packet_aorta.hpp` — LiDAR IMU conversion and units.
+- `src/middleware/sensor/lidar/time_sync/time_sync.cpp` — Clock synchronization and fault reporting.
+- `src/application/vita_slam/vs_ros/aorta_interface/aorta_sensor_adapters.hpp` — Consumer timestamp/point interpretation.
 
-## Common Evidence To Collect
-
-- Topic existence/count/rate for `/lidar_points`, `/lidar_imu`, and any packet topic in the bag.
-- PointCloud2 fields, width/height, `point_step`, `row_step`, data length, and first/last stamp.
-- Number of points per frame and min/max range distribution.
-- Driver log lines containing `vanjee`, `lidar`, `RTC`, `PPS`, `sync`, `packet`, `timeout`, or `PERCEPTION_LIDAR`.
-- If timing is the issue, compare:
-  - MCAP log time.
-  - ROS header stamp.
-  - Per-point time field and configured `timestamp_unit`.
-  - Expected scan period.
+Record exact channel/schema, source/publish/log timestamps, counts and configuration.
+Topic registration, static code and an old sample do not establish current device health.
+See [Aorta contract](../../AORTA.md).

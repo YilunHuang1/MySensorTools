@@ -2,6 +2,7 @@
 """
 分析所有6组测试的角度变化
 """
+import argparse
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
@@ -25,12 +26,14 @@ LOGS = [
 
 def load_data(log_file):
     df = pd.read_csv(LOG_DIR / log_file)
+    if df.empty:
+        raise ValueError('empty CSV')
     df['time_rel'] = df['elapsed_s'] - df['elapsed_s'].iloc[0]
     return df
 
 def plot_all_angles_comparison(datasets, output_path):
     """对比所有测试的角度变化"""
-    fig, axes = plt.subplots(3, 2, figsize=(16, 12))
+    fig, axes = plt.subplots(max(1, (len(datasets) + 1) // 2), 2, figsize=(16, 4 * max(1, (len(datasets) + 1) // 2)))
     axes = axes.flatten()
     
     for idx, data in enumerate(datasets):
@@ -76,7 +79,7 @@ def plot_angle_distributions(datasets, output_path):
         labels.append(data['label'])
         colors.append(data['color'])
     
-    bp = ax1.boxplot(angle_data, labels=labels, patch_artist=True,
+    bp = ax1.boxplot(angle_data, tick_labels=labels, patch_artist=True,
                      showmeans=True, meanline=True)
     for patch, color in zip(bp['boxes'], colors):
         patch.set_facecolor(color)
@@ -109,7 +112,7 @@ def plot_angle_distributions(datasets, output_path):
 
 def plot_angular_velocity_comparison(datasets, output_path):
     """角速度对比"""
-    fig, axes = plt.subplots(3, 2, figsize=(16, 12))
+    fig, axes = plt.subplots(max(1, (len(datasets) + 1) // 2), 2, figsize=(16, 4 * max(1, (len(datasets) + 1) // 2)))
     axes = axes.flatten()
     
     for idx, data in enumerate(datasets):
@@ -117,9 +120,9 @@ def plot_angular_velocity_comparison(datasets, output_path):
         ax = axes[idx]
         
         # 计算角速度
-        angle_diff = df['angle_deg'].diff()
+        angle_diff = (df['angle_deg'].diff() + 180) % 360 - 180
         time_diff = df['time_rel'].diff()
-        angular_velocity = angle_diff / time_diff
+        angular_velocity = angle_diff / time_diff.where(time_diff > 0)
         
         ax.plot(df['time_rel'][1:], angular_velocity[1:], 
                color=data['color'], alpha=0.6, linewidth=1)
@@ -153,7 +156,7 @@ def analyze_all_angles(datasets):
     stats = []
     for data in datasets:
         df = data['df']
-        angle_diff = df['angle_deg'].diff().abs()
+        angle_diff = ((df['angle_deg'].diff() + 180) % 360 - 180).abs()
         
         # 稳定性分类
         stable = (angle_diff < 1.0).sum()
@@ -186,6 +189,16 @@ def analyze_all_angles(datasets):
     print("\n" + "="*100 + "\n")
 
 def main():
+    global LOG_DIR, LOGS, OUTPUT_DIR
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('files', nargs='+', type=Path)
+    parser.add_argument('--output-dir', type=Path, default=Path('output/uwb_logs'))
+    args = parser.parse_args()
+    LOG_DIR = Path('.')
+    OUTPUT_DIR = args.output_dir
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    LOGS = [dict(file=path.resolve(), label=path.stem, color=f'C{index % 10}') for index, path in enumerate(args.files)]
+    failed = 0
     print("="*100)
     print("  所有测试角度分析")
     print("="*100)
@@ -202,8 +215,11 @@ def main():
             })
             print(f"✅ 加载: {log['file']} ({len(df)} 帧)")
         except Exception as e:
+            failed += 1
             print(f"❌ 加载失败 {log['file']}: {e}")
     
+    if not datasets:
+        raise ValueError("没有成功加载任何数据")
     print(f"\n共加载 {len(datasets)} 个数据集\n")
     
     # 生成图表
@@ -219,5 +235,7 @@ def main():
     print(f"✅ 所有角度分析完成！结果保存在: {OUTPUT_DIR}")
     print("="*100)
 
+    return 1 if failed else 0
+
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

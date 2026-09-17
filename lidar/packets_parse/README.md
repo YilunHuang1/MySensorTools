@@ -1,3 +1,9 @@
+> Aorta migration (2026-09-17): install the repository root package first with
+> `pip install -e '.[analysis,device,infrared]'`. Offline MCAP readers accept embedded
+> CDR/BFBS/JSON schemas; live tools use Aorta. Historical ROS commands, fixed paths,
+> sample versions and results below are archival context. Use each updated entry's
+> `--help` and `docs/TOOLS_GUIDE.md` for current commands and verification limits.
+
 # 万集 WLR-722Z 激光雷达点云提取工具
 
 从 ROS2 MCAP 数据包中提取 `/lidar_packets`，解码为 PCD ASCII 点云文件。

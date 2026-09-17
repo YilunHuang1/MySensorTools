@@ -1,47 +1,15 @@
-# IMU Code Map
+# imu-mcap-analysis source map
 
-## Current Verified Paths
+Baseline: remote master `291b58055b54a924735604f26b840ab1f22b5427` (2026-09-17).
+Paths below are relative to vita-robot. Read them at that revision with `git show`;
+recheck remote master and deployed revision before a new investigation.
 
-- `src/application/vita_slam/vs_cfg/slam/slam.yaml`
-  - Primary IMU topic: `/imu_raw`.
-  - LiDAR internal IMU topic: `/lidar_imu`.
-- `src/application/vita_slam/vs_ros/slam_node.cpp`
-  - `PrimaryImuCallback()` computes `acc_norm` from `sensor_msgs::msg::Imu.linear_acceleration`.
-  - Fault condition: `acc_norm < 0.1 || acc_norm > 50.0`.
-  - Reports `IMU_DATA_ANOMALY`.
-  - Then converts with `RosUtils::ToImuMeas()` and adds the measurement to SLAM.
-  - `LidarImuCallback()` converts `/lidar_imu` with sensor id `1`.
-- `src/application/vita_slam/vs_sys/fault_reporter.hpp`
-  - Maps `IMU_DATA_ANOMALY` to `PERCEPTION_SLAM_SENSOR_FUSION_IMU_DATA_ANOMALY`.
-- `src/middleware/fault_ids/sub_fault_id/fault_id_perception.h`
-  - `PERCEPTION_SLAM_SENSOR_FUSION_IMU_DATA_ANOMALY = 0x40070102`.
-- `src/application/vita_slam/vs_ros/ros_interface/ros_utils.hpp`
-  - `ToImuMeas()` copies acceleration and angular velocity from ROS IMU message into SLAM measurement.
-- `src/application/lowlevel_service/ControlManager.cpp`
-  - Publishes `/imu_raw`.
-  - `OnImuPublishTimer()` fills `linear_acceleration` from `imu_state.acc_raw`.
-  - Fills `angular_velocity` from `imu_state.gyro_raw`.
-- `src/middleware/sensor/imu/imu.cpp`
-  - Platform SPI device is selected by build platform: S100 uses `/dev/spidev0.0`, X5 uses `/dev/spidev2.0`.
-  - `ReadRawAccel()` reads raw ASM330 accel registers and scales to g-like units.
-  - `DataCollectionLoop()` stores `state.acc_raw` and `state.gyro_raw` before compensation/transform.
-  - VQF uses the sampled accel/gyro for orientation, but `/imu_raw.linear_acceleration` comes from `acc_raw`.
-- `src/middleware/peripheral/imu_node.cpp`
-  - Publishes X5/head IMU, typically `/imu_raw_x5`, from peripheral middleware.
-- `src/middleware/sensor/lidar` and VanJee driver
-  - LiDAR internal IMU publishes `/lidar_imu`; treat separately from S100 body ASM330.
+- `src/middleware/sensor/imu/aorta_imu_mapper.cpp` — Aorta IMU mapping; values copied here do not establish physical units by themselves.
+- `src/middleware/sensor/imu/imu.cpp` — Sensor conversion, coordinate transforms, calibration and filtering.
+- `src/application/lowlevel_service/ControlManager.cpp` — Trace body-IMU production and source units for the exact revision.
+- `src/application/vita_slam/vs_ros/aorta_interface/aorta_sensor_adapters.hpp` — Aorta-to-SLAM conversion and timestamp interpretation.
+- `src/application/vita_slam/vs_ros/slam_node.cpp` — Fault thresholds and active consumers; distinguish body IMU from LiDAR IMU.
 
-## Evidence To Collect
-
-- MCAP samples for `/imu_raw`, `/imu_raw_x5`, `/lidar_imu` around the fault time.
-- `/s100/vlog` and `/x5/vlog` lines around the same time.
-- `acc_norm`, individual accel axes, gyro axes, header stamp, log time.
-- Neighbor samples before/after the fault sample.
-- SPI/read errors, register dump evidence, or missing source-side logs.
-
-## Code Improvements To Consider During Debug
-
-- Propagate SPI transfer failure from low-level register reads.
-- Drop or mark a single impossible all-axis accel frame before publishing `/imu_raw`.
-- Log raw register bytes when `acc_raw.norm()` is outside expected range.
-- In SLAM, consider gating on consecutive abnormal primary IMU frames and avoid feeding bad frames into `AddImuMeas()`.
+Record exact channel/schema, source/publish/log timestamps, counts and configuration.
+Topic registration, static code and an old sample do not establish current device health.
+See [Aorta contract](../../AORTA.md).

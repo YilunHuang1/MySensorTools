@@ -5,13 +5,15 @@ description: Debug Vita robot LiDAR issues using vita-robot code-grounded checks
 
 # LiDAR Debug
 
+Read [the Aorta contract](../AORTA.md) before these sensor-specific checks.
+
 Use this skill for S100 LiDAR problems. Treat old Copilot notes as hints only; verify every conclusion against the current `vita-robot` tree and the provided logs/bags.
 
 ## Workflow
 
 1. Capture the symptom, exact CST time, robot platform, and data source: live robot, log archive, rosbag, or MCAP.
 2. Read the current code/config before answering. Start with [references/code-map.md](references/code-map.md).
-3. Separate the chain into driver output, ROS topic transport, SLAM/VLN consumption, and fault reporting.
+3. Separate the chain into driver output, Aorta transport, SLAM/VLN consumption, and fault reporting.
 4. For bag/MCAP issues, use `robot-rosbag-log-triage` first to get topic counts, time ranges, and logs; then return here for LiDAR-specific interpretation.
 5. For point cloud issues, inspect both packet-level evidence and PointCloud2 evidence. Do not infer packet loss only from SLAM behavior.
 6. For timing issues, compare message header stamp, publish/log time, point `time` field/unit, LiDAR RTC sync logs, and expected scan period.
@@ -25,25 +27,17 @@ Use this skill for S100 LiDAR problems. Treat old Copilot notes as hints only; v
 
 ## Live Checks
 
-Prefer non-destructive commands:
-
 ```bash
-ros2 topic list | grep -Ei 'lidar|points|packet|imu'
-ros2 topic hz /lidar_points
-ros2 topic echo /lidar_points --once --no-arr
-ros2 topic hz /lidar_imu
-grep -RniE 'PERCEPTION_LIDAR|RTC|lidar|vanjee|pps|sync' /log/usr/archive
+python lidar/realtime_check/lidar_realtime_check.py --mode both --timeout 5 --output lidar-check.json
 ```
 
-Use packet capture only when network/UDP is the question and the interface/port are known:
-
-```bash
-tcpdump -i <iface> udp -c 50
-```
+For offline data add `--mcap capture.mcap`. Do not bind an active production UDP
+port; passive Aorta recording is preferred. Reassemble packet bytes across MCAP
+messages before checking CRC and sequence continuity.
 
 ## Interpretation Rules
 
-- `/lidar_points` is the main PointCloud2 topic consumed by `vita_slam` and VLN guard paths in the current code.
+- `/lidar_points` is the main point-cloud topic (ROS PointCloud2 or Aorta foxglove.PointCloud, depending on deployment) consumed by `vita_slam` and VLN guard paths in the current code.
 - `/lidar_imu` is the LiDAR internal IMU topic consumed by SLAM as the LiDAR IMU, not the S100 body IMU.
 - The LiDAR module in `src/middleware/sensor/lidar` wraps the third-party VanJee SDK target; driver topics and packet behavior may be defined under `src/third_party/sensors/vanjee_lidar`.
 - A 100ms/200ms interval issue needs scan-period, header stamp, publish time, and packet/frame assembly checks. Do not call it packet loss until packet counts or frame IDs support it.

@@ -14,7 +14,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEBUG_CASES_ROOT = REPO_ROOT / "debug_cases"
-PRIMARY_CODEBASE = os.environ.get("VITA_ROBOT_ROOT", str(REPO_ROOT / "vita-robot"))
+PRIMARY_CODEBASE = os.environ.get("VITA_ROBOT_ROOT", str(REPO_ROOT.parent / "vita-robot"))
 TOOLS_ROOT = REPO_ROOT
 
 DATA_EXTS = {

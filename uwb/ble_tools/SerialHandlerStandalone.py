@@ -3,6 +3,7 @@ SerialHandler standalone version - no ROS2 dependency.
 Enhanced with diagnostics: FPS tracking, statistics, frame gap detection, CSV logging.
 """
 import struct
+import math
 import serial
 import threading
 import queue
@@ -13,6 +14,7 @@ from datetime import datetime
 from collections import deque
 from CmdBuilder import CmdEnum, CmdBuilder
 from PacketParser import PacketParser
+from sensor_tools.uwb_serial import Framer, packet_tlvs
 from crc16_utils import crc16_xmodem
 
 
@@ -42,7 +44,7 @@ class RangingStats:
         self._frames_since_report = 0
 
     def update(self, distance, angle, pitch, rssi_values=None):
-        now = time.time()
+        now = time.monotonic()
         if self.start_time is None:
             self.start_time = now
             self._last_report_time = now
@@ -53,7 +55,7 @@ class RangingStats:
             self.frame_gaps.append(gap)
             if gap > self.max_gap_ever:
                 self.max_gap_ever = gap
-            # 判断丢帧：间隔 > 正常间隔的 2.5 倍
+            # 统计长间隔（不等于丢包）：间隔 > 正常间隔的 2.5 倍
             avg_gap = self.avg_gap()
             if avg_gap > 0 and gap > avg_gap * 2.5:
                 self.drop_count += 1
@@ -86,7 +88,7 @@ class RangingStats:
     def global_fps(self):
         if self.start_time is None or self.total_frames < 2:
             return 0.0
-        dt = time.time() - self.start_time
+        dt = time.monotonic() - self.start_time
         return self.total_frames / dt if dt > 0 else 0.0
 
     def distance_stats(self):
@@ -104,14 +106,15 @@ class RangingStats:
     def angle_stats(self):
         if not self.angles:
             return None
-        a = list(self.angles)
-        return {
-            'min': min(a),
-            'max': max(a),
-            'avg': sum(a) / len(a),
-            'latest': a[-1],
-            'std': self._std(a),
-        }
+        values = list(self.angles)
+        sine = sum(math.sin(math.radians(value)) for value in values) / len(values)
+        cosine = sum(math.cos(math.radians(value)) for value in values) / len(values)
+        resultant = min(1., math.hypot(sine, cosine))
+        # Circular moments avoid interpreting 359 and 1 degrees as 180 degrees.
+        mean = math.degrees(math.atan2(sine, cosine))
+        std = math.degrees(math.sqrt(-2 * math.log(max(resultant, 1e-15))))
+        return {'min': min(values), 'max': max(values), 'avg': mean,
+                'latest': values[-1], 'std': std}
 
     def pitch_stats(self):
         if not self.pitches:
@@ -129,7 +132,7 @@ class RangingStats:
         """每 interval 秒打印一次摘要"""
         if self._last_report_time is None:
             return False
-        if time.time() - self._last_report_time >= interval:
+        if time.monotonic() - self._last_report_time >= interval:
             return True
         return False
 
@@ -141,10 +144,10 @@ class RangingStats:
         a = self.angle_stats()
         p = self.pitch_stats()
         frames = self._frames_since_report
-        elapsed = time.time() - self._last_report_time if self._last_report_time else 0
+        elapsed = time.monotonic() - self._last_report_time if self._last_report_time else 0
         period_fps = frames / elapsed if elapsed > 0 else 0
 
-        self._last_report_time = time.time()
+        self._last_report_time = time.monotonic()
         self._frames_since_report = 0
 
         return {
@@ -223,7 +226,8 @@ class SerialHandler:
     PACKET_HEAD1 = 0xAA
 
     def __init__(self, port='/dev/ttyS7', baudrate=115200, timeout=0.011,
-                 enable_csv=True, csv_path=None, summary_interval=3.0):
+                 enable_csv=True, csv_path=None, summary_interval=3.0, allow_control=False):
+        self.allow_control = allow_control
         self.port = port
         self.baudrate = baudrate
         self.timeout = timeout
@@ -246,26 +250,30 @@ class SerialHandler:
                 bytesize=serial.EIGHTBITS,
                 parity=serial.PARITY_NONE,
                 stopbits=serial.STOPBITS_ONE,
-                timeout=self.timeout
+                timeout=self.timeout,
+                exclusive=True,
             )
             print(f"✅ Opened serial port {self.port} successfully.")
             threading.Thread(target=self.read_from_port, daemon=True).start()
         except serial.SerialException as e:
-            print(f"❌ Failed to open {self.port}: {e}")
+            raise RuntimeError(f"Failed to open {self.port}: {e}") from e
 
     def stop(self):
+        if getattr(self, '_stopped', False):
+            return
+        self._stopped = True
+        self.quit = True
         if self.ser:
             self.ser.close()
-        self.quit = True
+        self._print_final_summary()
         if self.csv_logger:
             self.csv_logger.close()
-        self._print_final_summary()
 
     def _print_final_summary(self):
         s = self.stats
         if s.total_frames == 0:
             return
-        elapsed = time.time() - s.start_time if s.start_time else 0
+        elapsed = time.monotonic() - s.start_time if s.start_time else 0
         d = s.distance_stats()
         
         summary_lines = []
@@ -275,7 +283,7 @@ class SerialHandler:
         summary_lines.append(f"  总帧数     : {s.total_frames}")
         summary_lines.append(f"  运行时间   : {elapsed:.1f}s")
         summary_lines.append(f"  平均 FPS   : {s.global_fps():.1f}")
-        summary_lines.append(f"  丢帧次数   : {s.drop_count}")
+        summary_lines.append(f"  长间隔次数   : {s.drop_count}")
         summary_lines.append(f"  最大帧间隔 : {s.max_gap_ever * 1000:.1f}ms")
         if d:
             summary_lines.append(f"  距离范围   : {d['min']:.3f}m ~ {d['max']:.3f}m")
@@ -292,40 +300,29 @@ class SerialHandler:
             self.csv_logger.write_summary(summary_text)
 
     def read_from_port(self):
-        buffer = bytearray()
-        while True:
-            if self.quit:
+        framer = Framer()
+        while not self.quit:
+            try:
+                data = self.ser.read(1024)
+                for packet in framer.feed(data):
+                    self.packet_queue.put(packet)
+            except (serial.SerialException, OSError) as error:
+                if not self.quit:
+                    print(f"serial read failed: {error}")
+                self.quit = True
                 break
-            data = self.ser.read(1024)
-            if data:
-                buffer.extend(data)
-                while len(buffer) >= 7:
-                    if buffer[0] == self.PACKET_HEAD0 and buffer[1] == self.PACKET_HEAD1:
-                        tlv_total_len = struct.unpack_from('<H', buffer, 3)[0]
-                        packet_len = tlv_total_len + 7
-                        if len(buffer) >= packet_len:
-                            packet = buffer[:packet_len]
-                            crc_received = struct.unpack_from('>H', packet, packet_len - 2)[0]
-                            crc_calculated = crc16_xmodem(packet[5:packet_len - 2])
-                            if crc_received == crc_calculated:
-                                self.packet_queue.put(packet)
-                                buffer = buffer[packet_len:]
-                            else:
-                                print("check crc failed")
-                                buffer = buffer[1:]
-                        else:
-                            break
-                    else:
-                        buffer = buffer[1:]
-            else:
-                time.sleep(0.01)
 
     def process_packets(self):
         while not self.packet_queue.empty():
             packet = self.packet_queue.get()
 
-            metric_result = PacketParser.parse(packet)
-            if metric_result is not None:
+            try:
+                measurements = PacketParser.parse_all(packet)
+            except ValueError as error:
+                print(f"invalid ranging packet: {error}")
+                self.packet_queue.task_done()
+                continue
+            for metric_result in measurements:
                 dist = metric_result['distance']
                 angle = metric_result['angle']
                 pitch = metric_result['pitch']
@@ -349,21 +346,14 @@ class SerialHandler:
                 if self.stats.should_print_summary(self.summary_interval):
                     self._print_periodic_summary()
 
-            # 处理 UWB 控制 TLV
-            tlv = packet[5:]
-            tlv_type = tlv[0] if tlv[0] != 0x00 else tlv[2]
-            if tlv_type == 0x24:
-                print("Set apple fira success")
-                if self.tx_char_global is not None:
-                    self.tx_char_global.Notify(bytearray([0x02]))
-                cmdStartRanging = CmdBuilder.build(CmdEnum.START_RANGING, self.session_id)
-                self.sendCmd(cmdStartRanging)
-                time.sleep(0.1)
-            elif tlv_type == 0x07:
-                tlv_len = tlv[1]
-                cmd = tlv[2]
-                if cmd == 0x02:
-                    print(f"Received version response data:{tlv_len}")
+            for kind, value in packet_tlvs(packet):
+                if kind == 0x24 and self.allow_control:
+                    print("Set apple fira success")
+                    if self.tx_char_global is not None:
+                        self.tx_char_global.Notify(bytearray([0x02]))
+                    self.sendCmd(CmdBuilder.build(CmdEnum.START_RANGING, self.session_id))
+                elif kind == 0x07 and value and value[0] == 0x02:
+                    print(f"Received version response data: {len(value)}")
 
             self.packet_queue.task_done()
         return True
@@ -393,7 +383,7 @@ class SerialHandler:
                   f"avg={p['avg']:.1f}±{p['std']:.1f}°")
         summary_lines.append(f"│ 帧间隔: avg={s['avg_gap']*1000:.1f}ms  "
               f"max_ever={s['max_gap']*1000:.1f}ms  "
-              f"丢帧={s['drop_count']}次")
+              f"长间隔={s['drop_count']}次")
         summary_lines.append(f"│ 总帧数: {s['total_frames']}")
         summary_lines.append("└───────────────────────────────────────────────────┘\n")
         
@@ -405,6 +395,8 @@ class SerialHandler:
             self.csv_logger.write_summary(summary_text)
 
     def sendCmd(self, cmd):
+        if not self.allow_control:
+            raise PermissionError("serial control is disabled for this passive handler")
         print(f"send cmd :{cmd.hex(' ')}")
         written = self.ser.write(cmd)
         if written == len(cmd):

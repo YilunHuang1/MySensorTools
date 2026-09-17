@@ -24,6 +24,7 @@ class FrameExtractor:
         self.vert_angles = vert_angles
         self.horiz_angles = horiz_angles
         self.output_dir = output_dir
+        self.invalid_packet_count = 0
         
         VanjeeDecoder.init_trig_tables()
         self.decoder = VanjeeDecoder()
@@ -45,8 +46,8 @@ class FrameExtractor:
         # 获取时间戳 (纳秒)
         timestamp_ns = mcap_message.publish_time
         
-        # 解析 CDR 消息
-        data_bytes = self.decoder.parse_mcap_message(mcap_message.data)
+        # MCAP transport has already been decoded according to its embedded schema
+        data_bytes = mcap_message.data
         if data_bytes is None or len(data_bytes) == 0:
             return results
         
@@ -61,6 +62,7 @@ class FrameExtractor:
                 pkt_data, self.vert_angles, self.horiz_angles
             )
             if result is None:
+                self.invalid_packet_count += 1
                 continue
             
             azimuth, points = result

@@ -11,6 +11,7 @@ Quanji 1.2m 静态数据核查与重新计算脚本
 """
 
 import json
+import argparse
 import math
 from pathlib import Path
 from datetime import datetime
@@ -20,6 +21,8 @@ import pandas as pd
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+plt.rcParams["font.sans-serif"] = ["Arial Unicode MS", "DejaVu Sans"]
+plt.rcParams["axes.unicode_minus"] = False
 
 BASE_DIR = Path(__file__).parent
 CSV_PATH = BASE_DIR / "quanji_test/1.2m_log-2025_10_24-14_38_52_218.csv"
@@ -215,8 +218,20 @@ def make_plots(df: pd.DataFrame):
 
 
 def main():
+    global CSV_PATH, OUT_DIR, PLOTS_DIR, OUT_JSON, ORIG_JSON
+    parser = argparse.ArgumentParser(description='Audit a Quanji 1.2m static CSV (unadjusted source angles)')
+    parser.add_argument('csv', type=Path)
+    parser.add_argument('--output-dir', type=Path, required=True)
+    parser.add_argument('--original-json', type=Path, help='Optional prior comparison report')
+    args = parser.parse_args()
+    CSV_PATH, OUT_DIR = args.csv, args.output_dir
+    PLOTS_DIR = OUT_DIR / 'plots'
+    OUT_JSON = OUT_DIR / 'quanji_1_2m_static_recheck.json'
+    ORIG_JSON = args.original_json or OUT_DIR / 'analysis_results.json'
     ensure_dirs()
     df = load_csv()
+    if df.empty or any(column not in df for column in [ANGLE_COL, DIST_CENTER_COL]):
+        raise ValueError('CSV must contain non-empty original angle and car-center distance columns')
 
     # 1) 标准差验证
     angle_stats = recompute_angle_stats(df[ANGLE_COL] if ANGLE_COL in df.columns else pd.Series(dtype=float))

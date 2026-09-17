@@ -5,22 +5,17 @@ import yaml
 import cv2
 import csv
 import argparse
-import matplotlib.pyplot as plt
 import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from sensor_tools.calibration import load, stereo
 from datetime import datetime
 
 # 设置matplotlib为非交互模式
-matplotlib.use('Agg')  # 这行必须在导入pyplot之后
+matplotlib.use('Agg')  # 已在 pyplot 导入前设置
 
 def load_calibration_yaml(calib_path):
-    """处理OpenCV风格的YAML文件（带%YAML标头）"""
-    with open(calib_path, 'r') as f:
-        # 跳过YAML版本声明行
-        if f.readline().startswith('%YAML'):
-            return yaml.safe_load(f)
-        else:
-            f.seek(0)
-            return yaml.safe_load(f)
+    return load(calib_path)
 
 def check_distortion_curve(x, y):
     """
@@ -53,7 +48,7 @@ def check_distortion_curve(x, y):
         return flags
     
     # 检查NaN值
-    if np.isnan(x).any() or np.isnan(y).any():
+    if not np.isfinite(x).all() or not np.isfinite(y).all():
         flags['has_missing'] = True
     
     # ------------------------
@@ -95,7 +90,7 @@ def check_distortion_curve(x, y):
     
     return flags
 
-def analyze_distortion_curve(K_l, dist_l, K_r, dist_r, img_size, output_path, file_name):
+def analyze_distortion_curve(K_l, dist_l, K_r, dist_r, img_size, output_path, file_name, left_model="radial_tangential", right_model="radial_tangential"):
     """
     绘制左右相机畸变曲线并保存图像
     """
@@ -107,12 +102,12 @@ def analyze_distortion_curve(K_l, dist_l, K_r, dist_r, img_size, output_path, fi
     plt.grid(True, alpha=0.3)
     
     # 绘制左相机曲线
-    _, curve_left = compute_distortion_curve(K_l, dist_l, img_size)
+    _, curve_left = compute_distortion_curve(K_l, dist_l, img_size, left_model)
     result_left = check_distortion_curve(curve_left[0], curve_left[1])
     plt.plot(curve_left[0], curve_left[1], 'b-', linewidth=2, label='Left Camera')
     
     # 绘制右相机曲线
-    _, curve_right = compute_distortion_curve(K_r, dist_r, img_size)
+    _, curve_right = compute_distortion_curve(K_r, dist_r, img_size, right_model)
     result_right = check_distortion_curve(curve_right[0], curve_right[1])
     plt.plot(curve_right[0], curve_right[1], 'r-', linewidth=2, label='Right Camera')
     
@@ -131,7 +126,7 @@ def analyze_distortion_curve(K_l, dist_l, K_r, dist_r, img_size, output_path, fi
     # 返回畸变检查结果
     return output_file, result_left, result_right
 
-def compute_distortion_curve(K, dist, img_size):
+def compute_distortion_curve(K, dist, img_size, model="radial_tangential"):
     """计算畸变曲线"""
     # 提取主点坐标
     cx, cy = K[0, 2], K[1, 2]
@@ -151,10 +146,11 @@ def compute_distortion_curve(K, dist, img_size):
     points[:, 1] = cy
     
     # 畸变矫正
-    undist_points = cv2.undistortPoints(
-        points.reshape(1, -1, 2), K, np.array(dist).flatten(), None, K
-    ).reshape(-1, 2)
-    
+    if model == 'equidistant':
+        undist_points = cv2.fisheye.undistortPoints(points.reshape(-1, 1, 2), K, np.asarray(dist).ravel(), P=K).reshape(-1, 2)
+    else:
+        undist_points = cv2.undistortPoints(points.reshape(1, -1, 2), K, np.asarray(dist).ravel(), P=K).reshape(-1, 2)
+
     # 计算归一化半径
     norm_x = (undist_points[:, 0] - cx) / K[0, 0]
     norm_y = (undist_points[:, 1] - cy) / K[1, 1]
@@ -163,10 +159,13 @@ def compute_distortion_curve(K, dist, img_size):
     return max_distance, (dist_samples, norm_r)
 
 def analyze_stereo_calibration(yaml_dir):
-    yaml_files = glob.glob(os.path.join(yaml_dir, "*.yaml"))
+    if os.path.isfile(yaml_dir):
+        yaml_files = [yaml_dir]
+        yaml_dir = os.path.dirname(os.path.abspath(yaml_dir))
+    else:
+        yaml_files = sorted(glob.glob(os.path.join(yaml_dir, "*.yaml")) + glob.glob(os.path.join(yaml_dir, "*.yml")))
     if not yaml_files:
-        print("未找到YAML文件！")
-        return
+        raise ValueError("未找到 YAML 文件")
     
     # 创建输出目录
     output_dir = os.path.join(yaml_dir, f"distortion_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
@@ -174,6 +173,8 @@ def analyze_stereo_calibration(yaml_dir):
     
     # 初始化数据结构
     results = []  # 存储所有结果
+    successful_results = []
+    failed_files = []
     csv_header = [
         '文件名', '左目fx', '左目fy', '左目cx', '左目cy', '左目主点偏差(px)', 
         '右目fx', '右目fy', '右目cx', '右目cy', '右目主点偏差(px)',
@@ -198,30 +199,30 @@ def analyze_stereo_calibration(yaml_dir):
     for yaml_file in yaml_files:
         try:
             file_name = os.path.splitext(os.path.basename(yaml_file))[0]
-            calib = load_calibration_yaml(yaml_file)
+            left, right = stereo(yaml_file)
 
             # 获取图像尺寸
-            img_w = calib.get('image_width', 1920)
-            img_h = calib.get('image_height', 1080)
+            img_w = left['width']
+            img_h = left['height']
             theory_cx = img_w / 2.0
             theory_cy = img_h / 2.0
             
             # 解析左相机参数
-            K_l = np.array(calib['left_camera_matrix']['data']).reshape(3,3)
-            dist_l = np.array(calib['left_distortion_coefficients']['data']).reshape(1,8)
+            K_l = left['K']
+            dist_l = left['D']
             fx_l, fy_l, cx_l, cy_l = K_l[0,0], K_l[1,1], K_l[0,2], K_l[1,2]
             left_dev = np.sqrt((cx_l - theory_cx)**2 + (cy_l - theory_cy)**2)
             
             # 解析右相机参数
-            K_r = np.array(calib['right_camera_matrix']['data']).reshape(3,3)
-            dist_r = np.array(calib['right_distortion_coefficients']['data']).reshape(1,8)
+            K_r = right['K']
+            dist_r = right['D']
             fx_r, fy_r, cx_r, cy_r = K_r[0,0], K_r[1,1], K_r[0,2], K_r[1,2]
             right_dev = np.sqrt((cx_r - theory_cx)**2 + (cy_r - theory_cy)**2)
             
             # 生成畸变曲线图并获取路径
             curve_path, result_left, result_right = analyze_distortion_curve(
                 K_l, dist_l, K_r, dist_r, 
-                [img_w, img_h], output_dir, file_name
+                [img_w, img_h], output_dir, file_name, left["model"], right["model"]
             )
             curve_rel_path = os.path.relpath(curve_path, yaml_dir)
             
@@ -263,7 +264,9 @@ def analyze_stereo_calibration(yaml_dir):
                 str(right_dist_abnormal)  # 转为字符串便于CSV处理
             ])
             
+            successful_results.append(results[-1])
         except Exception as e:
+            failed_files.append(yaml_file)
             print(f"处理文件 {yaml_file} 时出错: {str(e)}")
             results.append([
                 os.path.basename(yaml_file),
@@ -332,23 +335,23 @@ def analyze_stereo_calibration(yaml_dir):
     
     # 添加最差文件信息
     if left_worst_idx is not None:
-        left_worst_file = results[left_worst_idx][0]
-        left_worst_dev = results[left_worst_idx][5]
+        left_worst_file = successful_results[left_worst_idx][0]
+        left_worst_dev = successful_results[left_worst_idx][5]
         stats_rows.append([f"左目主点偏差最大文件: {left_worst_file}", f"偏差值: {left_worst_dev}px"])
     
     if right_worst_idx is not None:
-        right_worst_file = results[right_worst_idx][0]
-        right_worst_dev = results[right_worst_idx][10]
+        right_worst_file = successful_results[right_worst_idx][0]
+        right_worst_dev = successful_results[right_worst_idx][10]
         stats_rows.append([f"右目主点偏差最大文件: {right_worst_file}", f"偏差值: {right_worst_dev}px"])
     
     # 添加焦距偏差最大的文件
     if left_focal_worst_idx is not None:
-        left_focal_file = results[left_focal_worst_idx][0]
+        left_focal_file = successful_results[left_focal_worst_idx][0]
         left_focal_value = left_focal_diff[left_focal_worst_idx]
         stats_rows.append([f"左目焦距偏差最大文件: {left_focal_file}", f"|fx-fy|: {left_focal_value:.6f}"])
     
     if right_focal_worst_idx is not None:
-        right_focal_file = results[right_focal_worst_idx][0]
+        right_focal_file = successful_results[right_focal_worst_idx][0]
         right_focal_value = right_focal_diff[right_focal_worst_idx]
         stats_rows.append([f"右目焦距偏差最大文件: {right_focal_file}", f"|fx-fy|: {right_focal_value:.6f}"])
     
@@ -379,13 +382,14 @@ def analyze_stereo_calibration(yaml_dir):
     return {
         'csv_file': csv_filename,
         'output_dir': output_dir,
-        'left_worst_file': results[left_worst_idx][0] if left_worst_idx is not None else None,
-        'right_worst_file': results[right_worst_idx][0] if right_worst_idx is not None else None,
-        'left_focal_worst_file': results[left_focal_worst_idx][0] if left_focal_worst_idx is not None else None,
-        'right_focal_worst_file': results[right_focal_worst_idx][0] if right_focal_worst_idx is not None else None,
+        'left_worst_file': successful_results[left_worst_idx][0] if left_worst_idx is not None else None,
+        'right_worst_file': successful_results[right_worst_idx][0] if right_worst_idx is not None else None,
+        'left_focal_worst_file': successful_results[left_focal_worst_idx][0] if left_focal_worst_idx is not None else None,
+        'right_focal_worst_file': successful_results[right_focal_worst_idx][0] if right_focal_worst_idx is not None else None,
         'left_focal_max_dev': left_focal_diff[left_focal_worst_idx] if left_focal_worst_idx is not None else 0,
         'right_focal_max_dev': right_focal_diff[right_focal_worst_idx] if right_focal_worst_idx is not None else 0,
         'num_files': len(results),
+        'failed_files': failed_files,
         'left_dist_abnormal': left_dist_abnormal_files,
         'right_dist_abnormal': right_dist_abnormal_files
     }
@@ -396,7 +400,10 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
 
-    result = analyze_stereo_calibration(args.input)
+    try:
+        result = analyze_stereo_calibration(args.input)
+    except (OSError, ValueError) as error:
+        parser.exit(1, f"error: {error}\n")
     
     if result:
         print(f"分析完成！处理了 {result['num_files']} 个文件")
@@ -418,3 +425,4 @@ if __name__ == "__main__":
         
         if result['right_dist_abnormal']:
             print(f"右目畸变异常文件: {', '.join(result['right_dist_abnormal'])}")
+    raise SystemExit(1 if result["failed_files"] else 0)

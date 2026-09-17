@@ -1,157 +1,140 @@
-import sys
+#!/usr/bin/env python3
+"""Preserve an MCAP recording and add distance/angular acceleration channels.
+
+ROS CDR and Aorta FlatBuffers ranging inputs are supported. Derived Float64 CDR
+channels are readable by Foxglove without a robot-side ROS installation. Angular
+acceleration is deg/s²; distance acceleration follows the input distance unit/s².
+"""
 import argparse
-from rclpy.serialization import deserialize_message, serialize_message
-from rclpy.time import Time
-from rosbag2_py import SequentialReader, SequentialWriter, StorageOptions, ConverterOptions, TopicMetadata
+import math
+import os
+from pathlib import Path
+import struct
+import tempfile
 
-# 导入必要的某些消息类型
-# ⚠️ 重要：必须确保你的环境能找到 uwb_location 包
-try:
-    from uwb_location.msg import UWB
-    from std_msgs.msg import Float64
-except ImportError as e:
-    print("❌ 错误: 无法导入消息类型。请确保你已经 source 了包含 'uwb_location' 的工作空间。")
-    print(f"详细错误: {e}")
-    sys.exit(1)
+from mcap.reader import make_reader
+from mcap.writer import Writer
+from sensor_tools.mcap import Decoder, Record, channels as list_channels, topic_matches, uwb_fields
 
-def calculate_accel(current_val, prev_val, current_time_ns, prev_time_ns, prev_velocity):
-    """
-    计算加速度
-    返回: (当前加速度, 当前速度)
-    """
-    if prev_val is None or prev_time_ns is None:
-        return 0.0, 0.0
-    
-    dt = (current_time_ns - prev_time_ns) / 1e9  # 纳秒转秒
-    
-    if dt <= 0.000001: # 防止除以0或时间戳重复
-        return 0.0, prev_velocity
 
-    # 计算速度
-    current_velocity = (current_val - prev_val) / dt
-    
-    # 计算加速度
-    # 如果是第一帧计算速度，prev_velocity为0，加速度可能会突变，这里简单处理
-    accel = (current_velocity - prev_velocity) / dt
-    
-    return accel, current_velocity
+class Derivative:
+    def __init__(self, circular=False):
+        self.circular = circular
+        self.previous = None
+        self.velocity = None
+        self.previous_dt = None
+
+    def update(self, value, timestamp_ns):
+        if not math.isfinite(value):
+            raise ValueError('nonfinite ranging value')
+        if self.previous is None:
+            self.previous = (value, timestamp_ns)
+            return None
+        previous_value, previous_time = self.previous
+        dt = (timestamp_ns - previous_time) / 1e9
+        # A duplicated/reordered timestamp does not establish a new derivative interval.
+        if dt <= 1e-6:
+            return None
+        delta = value - previous_value
+        if self.circular:
+            delta = (delta + 180.) % 360. - 180.
+        velocity = delta / dt
+        acceleration = None if self.velocity is None else 2 * (velocity - self.velocity) / (dt + self.previous_dt)
+        self.previous = (value, timestamp_ns)
+        self.velocity, self.previous_dt = velocity, dt
+        return acceleration
+
+
+def process(input_path, output_path, topic='/uwb/data'):
+    input_path, output_path = Path(input_path), Path(output_path)
+    if input_path.resolve() == output_path.resolve():
+        raise ValueError('input and output must be different')
+    if output_path.exists():
+        raise FileExistsError(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    derived_topics = {
+        'distance_filtered': '/uwb/derived/dist_accel',
+        'angle': '/uwb/derived/angle_accel_raw',
+        'angle_filtered': '/uwb/derived/angle_accel_filtered',
+    }
+    if any(channel.topic in derived_topics.values() for channel in list_channels(input_path)):
+        raise ValueError('derived channel already exists in input')
+    fd, temporary = tempfile.mkstemp(prefix='.uwb-derived-', dir=output_path.parent)
+    count, derived_count = 0, 0
+    try:
+        with input_path.open('rb') as stream, os.fdopen(fd, 'wb') as out:
+            reader, writer = make_reader(stream), Writer(out)
+            writer.start()
+            sid = writer.register_schema(name='std_msgs/msg/Float64', encoding='ros2msg', data=b'float64 data\n')
+            derived = {field: writer.register_channel(name, 'cdr', sid,
+                        metadata={'unit': 'deg/s^2' if field != 'distance_filtered' else 'input_distance_unit/s^2',
+                                  'timestamp_basis': 'source timestamp, else MCAP publish_time'})
+                       for field, name in derived_topics.items()}
+            schemas, channels, states = {}, {}, {}
+            summary = reader.get_summary()
+            if summary:
+                for schema in summary.schemas.values():
+                    schemas[schema.id] = writer.register_schema(schema.name, schema.encoding, schema.data)
+                for channel in summary.channels.values():
+                    channels[channel.id] = writer.register_channel(channel.topic, channel.message_encoding,
+                        schemas.get(channel.schema_id, 0), metadata=channel.metadata)
+            decoder = Decoder()
+            selected_source = None
+            for schema, channel, message in reader.iter_messages(log_time_order=False):
+                if channel.topic in derived_topics.values():
+                    raise ValueError(f'derived channel already exists: {channel.topic}')
+                if schema and schema.id not in schemas:
+                    schemas[schema.id] = writer.register_schema(schema.name, schema.encoding, schema.data)
+                if channel.id not in channels:
+                    channels[channel.id] = writer.register_channel(channel.topic, channel.message_encoding,
+                        schemas.get(channel.schema_id, 0), metadata=channel.metadata)
+                writer.add_message(channels[channel.id], message.log_time, message.data,
+                                   message.publish_time, message.sequence)
+                count += 1
+                if not topic_matches(channel.topic, topic):
+                    continue
+                if selected_source is not None and selected_source != channel.topic:
+                    raise ValueError('multiple ranging sources match; pass one exact --topic')
+                selected_source = channel.topic
+                record = Record(channel.topic, schema.name if schema else '', channel.message_encoding,
+                                message.log_time, message.publish_time, decoder.decode(schema, channel, message.data))
+                row = uwb_fields(record)
+                # Keep each recorded source separate when a file contains multiple publishers/groups.
+                state = states.setdefault(channel.id, {field: Derivative(field != 'distance_filtered')
+                                                        for field in derived_topics})
+                for field, calculator in state.items():
+                    value = calculator.update(float(row[field]), row['timestamp_ns'])
+                    if value is not None:
+                        writer.add_message(derived[field], message.log_time,
+                            b'\x00\x01\x00\x00' + struct.pack('<d', value),
+                            row['timestamp_ns'], message.sequence)
+                        derived_count += 1
+            for item in reader.iter_metadata():
+                writer.add_metadata(item.name, item.metadata)
+            for item in reader.iter_attachments():
+                writer.add_attachment(item.create_time, item.log_time, item.name, item.media_type, item.data)
+            if not derived_count:
+                raise ValueError('need at least three valid ranging samples with increasing timestamps')
+            writer.finish()
+        Path(temporary).replace(output_path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+    return count, derived_count
+
 
 def main():
-    parser = argparse.ArgumentParser(description='Process UWB bag to add acceleration data.')
-    parser.add_argument('input_bag', help='Path to input .mcap file')
-    parser.add_argument('output_bag', help='Path to output .mcap file')
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('input_bag')
+    parser.add_argument('output_bag')
+    parser.add_argument('--topic', default='/uwb/data')
     args = parser.parse_args()
+    try:
+        count, derived = process(args.input_bag, args.output_bag, args.topic)
+        print(f'Preserved {count} messages; added {derived} derived messages -> {args.output_bag}')
+    except (OSError, ValueError) as error:
+        parser.exit(1, f'error: {error}\n')
+    return 0
 
-    input_bag_path = args.input_bag
-    output_bag_path = args.output_bag
 
-    # 1. 设置读取器
-    reader = SequentialReader()
-    storage_options = StorageOptions(uri=input_bag_path, storage_id='mcap')
-    converter_options = ConverterOptions(input_serialization_format='cdr', output_serialization_format='cdr')
-    reader.open(storage_options, converter_options)
-
-    # 2. 设置写入器
-    writer = SequentialWriter()
-    out_storage_options = StorageOptions(uri=output_bag_path, storage_id='mcap')
-    writer.open(out_storage_options, converter_options)
-
-    # 3. 准备新话题的元数据
-    # 我们将把计算出的加速度发布为 Float64 消息
-    new_topics = {
-        '/uwb/derived/dist_accel': 'std_msgs/msg/Float64',
-        '/uwb/derived/angle_accel_raw': 'std_msgs/msg/Float64',
-        '/uwb/derived/angle_accel_filtered': 'std_msgs/msg/Float64'
-    }
-
-    # 创建输入话题列表，用于复制
-    topics = reader.get_all_topics_and_types()
-    for topic in topics:
-        writer.create_topic(topic)
-
-    # 创建新话题
-    for topic_name, topic_type in new_topics.items():
-        writer.create_topic(TopicMetadata(
-            name=topic_name,
-            type=topic_type,
-            serialization_format='cdr',
-            offered_qos_profiles=''
-        ))
-
-    print(f"开始处理: {input_bag_path} -> {output_bag_path}")
-
-    # 4. 状态变量初始化
-    prev_time_ns = None
-    
-    # 距离相关
-    prev_dist = None
-    prev_dist_vel = 0.0
-    
-    # 角度相关 (Raw)
-    prev_angle_raw = None
-    prev_angle_raw_vel = 0.0
-    
-    # 角度相关 (Filtered)
-    prev_angle_filt = None
-    prev_angle_filt_vel = 0.0
-
-    count = 0
-
-    while reader.has_next():
-        (topic, data, t) = reader.read_next()
-        
-        # 将原始数据写入新包 (保持原始数据不变)
-        writer.write(topic, data, t)
-
-        if topic == '/uwb/data':
-            msg = deserialize_message(data, UWB)
-            
-            # 获取时间戳 (假设 header.stamp 是标准 ROS 时间)
-            current_time_ns = msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nsec
-            
-            # --- 计算距离加速度 (使用 filtered) ---
-            dist_accel, dist_vel = calculate_accel(
-                msg.distance_filtered, prev_dist, current_time_ns, prev_time_ns, prev_dist_vel
-            )
-            
-            # --- 计算角度加速度 (Raw) ---
-            angle_raw_accel, angle_raw_vel = calculate_accel(
-                msg.angle, prev_angle_raw, current_time_ns, prev_time_ns, prev_angle_raw_vel
-            )
-
-            # --- 计算角度加速度 (Filtered) ---
-            angle_filt_accel, angle_filt_vel = calculate_accel(
-                msg.angle_filtered, prev_angle_filt, current_time_ns, prev_time_ns, prev_angle_filt_vel
-            )
-
-            # --- 封装并写入新消息 ---
-            def write_float64(topic_name, value, timestamp):
-                new_msg = Float64()
-                new_msg.data = value
-                serialized = serialize_message(new_msg)
-                writer.write(topic_name, serialized, timestamp)
-
-            write_float64('/uwb/derived/dist_accel', dist_accel, t)
-            write_float64('/uwb/derived/angle_accel_raw', angle_raw_accel, t)
-            write_float64('/uwb/derived/angle_accel_filtered', angle_filt_accel, t)
-
-            # --- 更新状态 ---
-            prev_time_ns = current_time_ns
-            
-            prev_dist = msg.distance_filtered
-            prev_dist_vel = dist_vel
-            
-            prev_angle_raw = msg.angle
-            prev_angle_raw_vel = angle_raw_vel
-            
-            prev_angle_filt = msg.angle_filtered
-            prev_angle_filt_vel = angle_filt_vel
-
-        count += 1
-        if count % 100 == 0:
-            print(f"已处理 {count} 帧...", end='\r')
-
-    print(f"\n处理完成！共处理 {count} 条消息。")
-
-if __name__ == "__main__":
-    main()
+if __name__ == '__main__':
+    raise SystemExit(main())
